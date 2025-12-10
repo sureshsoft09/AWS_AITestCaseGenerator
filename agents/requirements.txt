@@ -1,0 +1,33 @@
+# Strands AI Agent Framework
+strands-agents>=1.19.0
+strands-agents-tools>=0.2.17
+
+# Memory and AI Tools
+mem0ai>=1.0.1
+ddgs>=9.9.3
+
+# FastAPI and server dependencies
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+
+# AWS SDK for Bedrock
+boto3>=1.34.0
+botocore>=1.34.0
+
+# OpenSearch client
+opensearch-py>=2.4.2
+requests-aws4auth>=1.2.3
+
+# HTTP Client
+httpx>=0.26.0
+
+# Environment & Configuration
+python-dotenv>=1.0.0
+
+# Logging
+python-json-logger>=2.0.7
+
+# Testing
+pytest>=7.4.3
+hypothesis>=6.92.1

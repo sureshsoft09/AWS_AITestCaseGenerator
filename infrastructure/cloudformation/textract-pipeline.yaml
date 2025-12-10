@@ -1,0 +1,285 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'MedAssureAI Textract Processing Pipeline - Lambda functions, SNS, and S3 event notifications'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: development
+    AllowedValues:
+      - development
+      - staging
+      - production
+    Description: Environment name
+  
+  IngestBucketName:
+    Type: String
+    Description: Name of the S3 bucket for document ingestion
+    Default: medassure-ingest-bucket
+  
+  ExtractedTextBucketName:
+    Type: String
+    Description: Name of the S3 bucket for extracted text storage
+    Default: medassure-extracted-text-bucket
+  
+  DynamoDBTableName:
+    Type: String
+    Description: Name of the DynamoDB table
+    Default: MedAssureAI_Artifacts
+
+Resources:
+  # SNS Topic for Textract completion notifications
+  TextractCompletionTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${Environment}-medassure-textract-completion'
+      DisplayName: MedAssureAI Textract Completion Notifications
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: MedAssureAI
+
+  # SNS Topic Policy
+  TextractCompletionTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref TextractCompletionTopic
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowTextractPublish
+            Effect: Allow
+            Principal:
+              Service: textract.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref TextractCompletionTopic
+
+  # IAM Role for Textract to publish to SNS
+  TextractSNSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-medassure-textract-sns-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: textract.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSNSFullAccess
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # IAM Role for Textract Trigger Lambda
+  TextractTriggerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-medassure-textract-trigger-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: TextractTriggerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub 'arn:aws:s3:::${IngestBucketName}/*'
+              - Effect: Allow
+                Action:
+                  - textract:StartDocumentTextDetection
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:UpdateItem
+                  - dynamodb:GetItem
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !GetAtt TextractSNSRole.Arn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Textract Trigger Lambda Function
+  TextractTriggerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-medassure-textract-trigger'
+      Runtime: python3.11
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt TextractTriggerLambdaRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref TextractCompletionTopic
+          SNS_ROLE_ARN: !GetAtt TextractSNSRole.Arn
+          DYNAMODB_TABLE_NAME: !Ref DynamoDBTableName
+      Code:
+        ZipFile: |
+          # Placeholder - deploy actual code from infrastructure/lambda/textract-trigger/
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': 'Placeholder'}
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: MedAssureAI
+
+  # Lambda permission for S3 to invoke Textract Trigger
+  TextractTriggerS3Permission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TextractTriggerFunction
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub 'arn:aws:s3:::${IngestBucketName}'
+
+  # SQS Queue for Review Agent (optional)
+  ReviewAgentQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${Environment}-medassure-review-agent-queue'
+      VisibilityTimeout: 300
+      MessageRetentionPeriod: 1209600  # 14 days
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: MedAssureAI
+
+  # IAM Role for Textract Completion Lambda
+  TextractCompletionLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-medassure-textract-completion-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: TextractCompletionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - textract:GetDocumentTextDetection
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                Resource: !Sub 'arn:aws:s3:::${ExtractedTextBucketName}/*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:UpdateItem
+                  - dynamodb:GetItem
+                  - dynamodb:Scan
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}'
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !GetAtt ReviewAgentQueue.Arn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Textract Completion Lambda Function
+  TextractCompletionFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-medassure-textract-completion'
+      Runtime: python3.11
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt TextractCompletionLambdaRole.Arn
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          EXTRACTED_TEXT_BUCKET: !Ref ExtractedTextBucketName
+          REVIEW_AGENT_QUEUE_URL: !Ref ReviewAgentQueue
+          DYNAMODB_TABLE_NAME: !Ref DynamoDBTableName
+      Code:
+        ZipFile: |
+          # Placeholder - deploy actual code from infrastructure/lambda/textract-completion/
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': 'Placeholder'}
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: MedAssureAI
+
+  # SNS Subscription for Textract Completion Lambda
+  TextractCompletionSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: lambda
+      TopicArn: !Ref TextractCompletionTopic
+      Endpoint: !GetAtt TextractCompletionFunction.Arn
+
+  # Lambda permission for SNS to invoke Textract Completion
+  TextractCompletionSNSPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TextractCompletionFunction
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref TextractCompletionTopic
+
+Outputs:
+  TextractCompletionTopicArn:
+    Description: ARN of the Textract completion SNS topic
+    Value: !Ref TextractCompletionTopic
+    Export:
+      Name: !Sub '${Environment}-TextractCompletionTopicArn'
+  
+  TextractSNSRoleArn:
+    Description: ARN of the IAM role for Textract to publish to SNS
+    Value: !GetAtt TextractSNSRole.Arn
+    Export:
+      Name: !Sub '${Environment}-TextractSNSRoleArn'
+  
+  TextractTriggerFunctionArn:
+    Description: ARN of the Textract trigger Lambda function
+    Value: !GetAtt TextractTriggerFunction.Arn
+    Export:
+      Name: !Sub '${Environment}-TextractTriggerFunctionArn'
+  
+  TextractCompletionFunctionArn:
+    Description: ARN of the Textract completion Lambda function
+    Value: !GetAtt TextractCompletionFunction.Arn
+    Export:
+      Name: !Sub '${Environment}-TextractCompletionFunctionArn'
+  
+  ReviewAgentQueueUrl:
+    Description: URL of the Review Agent SQS queue
+    Value: !Ref ReviewAgentQueue
+    Export:
+      Name: !Sub '${Environment}-ReviewAgentQueueUrl'
+  
+  ReviewAgentQueueArn:
+    Description: ARN of the Review Agent SQS queue
+    Value: !GetAtt ReviewAgentQueue.Arn
+    Export:
+      Name: !Sub '${Environment}-ReviewAgentQueueArn'

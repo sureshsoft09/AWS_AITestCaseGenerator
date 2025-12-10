@@ -1,0 +1,12 @@
+[{
+  "Rules": [{
+    "ResourceType": "collection",
+    "Resource": ["collection/medassure-agents-memory"],
+    "Permission": ["aoss:*"]
+  }, {
+    "ResourceType": "index",
+    "Resource": ["index/medassure-agents-memory/*"],
+    "Permission": ["aoss:*"]
+  }],
+  "Principal": ["arn:aws:sts::600107908141:assumed-role/cloudboost_account_operator/484539@Cognizant.com"]
+}]

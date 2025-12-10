@@ -1,0 +1,152 @@
+Use Case 
+
+Develop an AI-powered system that automatically converts healthcare software requirements into compliant, traceable test cases integrated with enterprise toolchains.
+
+Challenge
+Healthcare software development is constrained by complex regulatory requirements, diverse data formats, and the heavy burden of manual test c reation. QA teams spend enormous time converting specifications into test cases, ensuring compliance, and maintaining traceability across tools. This slows product cycles and limits scalability in a highly regulated domain where precision and compliance are critical.
+
+Objective
+Build an AI-powered system that autonomously generates test cases from requirements and specifications, reducing manual testing effort while ensuring compliance, scalability, and integration with existing enterprise toolchains.
+
+Solution Capabilities:
+Automate Test Case Generation:Convert natural language and structured specifications into test cases and datasets across multiple formats (PDF, Word, XML, Markup).
+Understand Complex Requirements:Accurately interpret healthcare-specific regulations and domain-heavy specifications.
+Integrate with Toolchains:Seamlessly connect with ALM platforms such as Jira, Polarion, and Azure DevOps.
+Ensure Compliance & Traceability:Support FDA, IEC 62304, ISO 9001, ISO 13485, and ISO 27001 standards with full requirement-to-test traceability.
+Enable GDPR-Compliant Pilots:Provide readiness for GDPR-compliant Proof of Concepts (PoCs) to demonstrate solution scalability.
+
+Solution:
+MedAssureAI - Automate Test case generation using AWS AI. Medical Assurance AI application to compliy all the healthcare compliances. This is mainly for health care domain. 
+
+MedAssureAI is an AI-driven test automation framework designed to automatically generate, enhance, and maintain test cases from healthcare software requirements. The solution uses multi-agent AI architecture powered by AWS and Bedrock models to understand complex regulatory documents, convert them into structured test cases, and ensure full traceability across the QA lifecycle.
+
+Key capabilities include:
+
+Automated Test Case Generation: Converts natural language and structured specifications (Word, PDF, XML) into test cases using contextual AI prompts.
+
+Continuous Adaptation: Dynamically updates or regenerates test cases when business logic or code changes occur.
+
+Compliance-Ready Intelligence: Incorporates built-in support for healthcare standards (FDA, IEC, ISO, GDPR, HIPAA).
+
+Integration with Toolchains: Seamlessly connects with Jira to maintain requirement-to-test mapping.
+
+Explainable AI: Enhances understanding of how test cases are derived, with AI prompting users for clarification when needed.
+
+Migration and Scalability: Supports importing existing test cases and continuous domain training using RAG for healthcare-specific terminology to agents.
+
+This idea aims to redefine test automation by transforming QA into a proactive, intelligent, and compliant process that reduces manual effort, enhances traceability, and ensures continuous testing excellence across the healthcare ecosystem.
+
+Technical deployment and coding tech stack:
+
+Front End - S3 + Cloud Front (React )
+BAckend API's - AWS ECS Fargate (Python) 
+Agents - Ecs Fargate (Python)
+MCP Servers - ECS Fargate(python)
+Database - DynamoDB
+Authentication - IAM 
+
+Application Structure Overview:
+
+Frontend - should have different tabs Dashboard, Generate, Enhance, migrate, analytics
+
+	Dashboard - It should call the backend APIs to load test artifacts in hierachy structure from DynamoDB project wise
+			  - It should have export to excel and xml format for every project
+			  - It should show the jira issue key for each item
+	Generate - Will input project name and jira project key, notifcaiton email then upload multiple requirement spec documents (pdf or word) 
+			- Then upload files - it should call backend api to uplaod the files into S3 bucket. Amazon S3 (ingest-bucket) stores originals files.
+			- AWS Lambda triggers Textract (for PDF/Word) or direct parser for XML.			
+			- After upload documents then review -> It should connect to agent with all the extracted req content to Multiagents to review the complete requirements. 
+			- In the review it should identify any ambigous, duplicate requirements, gaps and compliance missing in the requirements then Agent should send the queries to the users to get complete requirements without assume anything on its own
+			- Frontend should have chat capabilitie to handle this scneario.
+			- Once all the clarifications are cleared then agent will show the user that the estiated artifacts (epics, features, use cases and test cases) count.
+			- Then Genreate test cases - As agent running with session and previous all content including clarifications, differnt agent generate test cases artifacts. 
+			- Once the artifacts generated then multi agent should push data into Jira through Jira MCP server.
+			- Then update the artifacts with the respective Jira issue key, id, url and store into DynamoDB using DynamoBD MCP Server
+			- Show the output message that how many artifacts created in the frontend
+	Enhance - It  should have option to select the existing projects and view all the artifacts in the hierachy order
+			- Only use case and test case will have option to Refactor.
+			- If I click Refactor then it should open interactive chat popup window with all the details of the use case/ test case. 
+			- User should able interact with backend agent (enhance agent) for the use case / test case to provide more information/ changes/ enahcnement of the specific case.
+			- Once ready for apply enhancement - It should update the use cse/ test case into Jira through MCP server and also in the main DB DynamoDB through MCP server
+	Migrate - It should help users to migrate existing test cases which are there in excel where it generated offline. 
+			- Once the file uploaded, the backend API should extract the documents content and form json format then send it to agent to modify the artifacts and apply compliances then add the artifacts into Jir aand DynamoDB through MCP servers for the specific project
+	Analytics - It should have valid analytics to show for selected project based on the artifacts like priority, compliance mapping 
+
+Backend - should call AGents for review documents/ requirements/ enhance use case /test case/ migrate test cases/  with chat capabilities where it needed
+		- should have all the backend api's for all functionalites in the frontend. 
+		- It should handle upload files into S3 bucket
+		- AGent session with OpenSearch 
+		- API call functions with DynamoDB directly support frontend to show the data from the DB
+Agents - It should have multi agent framework with AWS Bedrock. 
+		- There should master agent whcih should handle user queries and pass on to different agents for respective tasks(review agent, test case generator, enhance, migrate)
+		- MCP servers should be connected to servers. JIRA MCP server and DynamoDB MCP server
+Jira MCP Server - MCP server should have tools to handle create new issues/ update/ delete issues/
+DynamoDB MCP Server - MCP server tools for CRUD operations.
+
+
+
+1 — High level architecture (MVP)
+
+	Components and flow (textual diagram):
+
+	Ingest
+
+	Users upload requirement docs (Word, PDF, XML) or push via Jira/SCM.
+
+	Amazon S3 (ingest-bucket) stores originals and parsed artifacts.
+
+	AWS Lambda triggers Textract (for PDF/Word) or direct parser for XML.
+
+	Preprocessing & extraction
+
+	Textract → raw text
+
+	Amazon Comprehend Medical → healthcare entities, codes
+
+	Custom NLP steps (tokenization, sectioning, normative detection)
+
+	RAG store & indexing
+
+	Embeddings stored in vector store (SageMaker or open-source vector DB running on AWS EC2/EKS — or use Amazon OpenSearch with k-NN plugin).
+
+	Metadata (doc id, section, clause, regulation tags) in DynamoDB.
+
+	Multi-agent orchestration (core)
+
+	Orchestrator agent (Step Functions or Step Functions + Lambda) coordinates agents:
+
+	Requirement Understanding Agent (Bedrock model)
+
+	Compliance Agent (rule-checks + Comprehend Medical + regulatory knowledge)
+
+	Test Case Generator Agent (Bedrock + prompt templates)
+
+	Traceability/Mapping Agent (maps tests → requirements, creates Jira links)
+
+	Regression Maintenance Agent (monitors diffs, auto-suggest updates)
+
+	Model training & fine-tuning
+
+	SageMaker for fine-tuning / building domain-specific embedding & reranker models.
+
+	RAG retrieval using embeddings + prompt to Bedrock for generation.
+
+	Integration & orchestration APIs
+
+	API Gateway → Lambda (REST) for UI, Jira webhooks, CI/CD triggers.
+
+	Bi-directional Jira sync (create/update tests → log to Jira requirements or test case issue types).
+
+	Storage & traceability
+
+	S3 for artifacts; DynamoDB for test metadata & trace mapping; optionally RDS for relational queries.
+
+	Audit logs to CloudWatch + S3 (immutable logs export).
+
+	Observability & security
+
+	CloudWatch dashboards + AWS X-Ray for tracing.
+
+	IAM, KMS for encryption, Macie/GuardDuty monitoring.
+
+	PHI redaction and logging controls.

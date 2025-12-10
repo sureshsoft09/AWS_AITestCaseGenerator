@@ -1,0 +1,183 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'MedAssureAI OpenSearch Cluster for Session Management'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: development
+    AllowedValues:
+      - development
+      - staging
+      - production
+    Description: Environment name
+  
+  OpenSearchInstanceType:
+    Type: String
+    Default: t3.small.search
+    Description: OpenSearch instance type
+    AllowedValues:
+      - t3.small.search
+      - t3.medium.search
+      - r6g.large.search
+      - r6g.xlarge.search
+  
+  OpenSearchInstanceCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10
+    Description: Number of OpenSearch instances
+  
+  OpenSearchVolumeSize:
+    Type: Number
+    Default: 10
+    MinValue: 10
+    MaxValue: 100
+    Description: EBS volume size in GB
+
+Conditions:
+  IsProduction: !Equals [!Ref Environment, production]
+
+Resources:
+  # OpenSearch Domain
+  OpenSearchDomain:
+    Type: AWS::OpenSearchService::Domain
+    Properties:
+      DomainName: !Sub '${Environment}-medassure-sessions'
+      EngineVersion: 'OpenSearch_2.11'
+      ClusterConfig:
+        InstanceType: !Ref OpenSearchInstanceType
+        InstanceCount: !Ref OpenSearchInstanceCount
+        DedicatedMasterEnabled: !If [IsProduction, true, false]
+        DedicatedMasterType: !If [IsProduction, 't3.small.search', !Ref 'AWS::NoValue']
+        DedicatedMasterCount: !If [IsProduction, 3, !Ref 'AWS::NoValue']
+        ZoneAwarenessEnabled: !If [IsProduction, true, false]
+        ZoneAwarenessConfig:
+          AvailabilityZoneCount: !If [IsProduction, 2, !Ref 'AWS::NoValue']
+      EBSOptions:
+        EBSEnabled: true
+        VolumeType: gp3
+        VolumeSize: !Ref OpenSearchVolumeSize
+        Iops: 3000
+        Throughput: 125
+      EncryptionAtRestOptions:
+        Enabled: true
+      NodeToNodeEncryptionOptions:
+        Enabled: true
+      DomainEndpointOptions:
+        EnforceHTTPS: true
+        TLSSecurityPolicy: Policy-Min-TLS-1-2-2019-07
+      AdvancedSecurityOptions:
+        Enabled: true
+        InternalUserDatabaseEnabled: true
+        MasterUserOptions:
+          MasterUserName: admin
+          MasterUserPassword: !Sub '{{resolve:secretsmanager:${OpenSearchMasterSecret}:SecretString:password}}'
+      AccessPolicies:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: '*'
+            Action: 'es:*'
+            Resource: !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${Environment}-medassure-sessions/*'
+      AdvancedOptions:
+        'rest.action.multi.allow_explicit_index': 'true'
+        'indices.fielddata.cache.size': '20'
+        'indices.query.bool.max_clause_count': '1024'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: MedAssureAI
+
+  # Secrets Manager for OpenSearch credentials
+  OpenSearchMasterSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${Environment}/medassure/opensearch/master'
+      Description: Master user credentials for OpenSearch
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "admin"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\'
+        RequireEachIncludedType: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: MedAssureAI
+
+  # IAM Role for Lambda to access OpenSearch
+  OpenSearchAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-medassure-opensearch-access-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: OpenSearchAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - es:ESHttpGet
+                  - es:ESHttpPut
+                  - es:ESHttpPost
+                  - es:ESHttpDelete
+                  - es:ESHttpHead
+                Resource: !Sub '${OpenSearchDomain.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref OpenSearchMasterSecret
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # CloudWatch Log Group for OpenSearch
+  OpenSearchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/opensearch/${Environment}-medassure-sessions'
+      RetentionInDays: !If [IsProduction, 30, 7]
+
+Outputs:
+  OpenSearchDomainEndpoint:
+    Description: OpenSearch domain endpoint
+    Value: !GetAtt OpenSearchDomain.DomainEndpoint
+    Export:
+      Name: !Sub '${Environment}-OpenSearchDomainEndpoint'
+  
+  OpenSearchDomainArn:
+    Description: OpenSearch domain ARN
+    Value: !GetAtt OpenSearchDomain.Arn
+    Export:
+      Name: !Sub '${Environment}-OpenSearchDomainArn'
+  
+  OpenSearchMasterSecretArn:
+    Description: ARN of the OpenSearch master credentials secret
+    Value: !Ref OpenSearchMasterSecret
+    Export:
+      Name: !Sub '${Environment}-OpenSearchMasterSecretArn'
+  
+  OpenSearchAccessRoleArn:
+    Description: ARN of the IAM role for OpenSearch access
+    Value: !GetAtt OpenSearchAccessRole.Arn
+    Export:
+      Name: !Sub '${Environment}-OpenSearchAccessRoleArn'
+  
+  OpenSearchDashboardURL:
+    Description: URL for OpenSearch Dashboards
+    Value: !Sub 'https://${OpenSearchDomain.DomainEndpoint}/_dashboards'
