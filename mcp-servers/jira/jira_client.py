@@ -2,6 +2,7 @@
 Jira client with retry logic and error handling.
 """
 import time
+import asyncio
 from jira import JIRA
 from jira.exceptions import JIRAError
 from typing import Dict, List, Any, Optional
@@ -278,6 +279,84 @@ class JiraClient:
             error_msg = f"Unexpected error searching issues: {str(e)}"
             logger.error(error_msg)
             return {"success": False, "error": error_msg}
+    
+    async def create_issues_in_batch(
+        self,
+        jira_issues: List[Dict[str, Any]],
+        project_key: str
+    ) -> Dict[str, Any]:
+        """
+        Create multiple Jira issues in batch.
+        
+        Args:
+            jira_issues: List of issue dictionaries containing summary, description, and issue_type
+            project_key: Jira project key (e.g., "MED")
+            
+        Returns:
+            Dictionary with created and failed issues
+        """
+        if not self.client:
+            return {"success": False, "error": "Jira client not initialized"}
+        
+        created = []
+        failed = []
+        
+        for idx, issue in enumerate(jira_issues):
+            try:
+                payload = {
+                    "project": {"key": project_key},
+                    "summary": issue.get("summary", ""),
+                    "description": issue.get("description", ""),
+                    "issuetype": {"name": issue.get("issue_type", "Task")}
+                }
+                
+                # Add any additional fields if provided
+                if "fields" in issue:
+                    payload.update(issue["fields"])
+                
+                def _create():
+                    return self.client.create_issue(fields=payload)
+                
+                result = self._retry_with_backoff(_create)
+                
+                created.append({
+                    "index": idx,
+                    "jira_issue_id": result.id,
+                    "jira_issue_key": result.key,
+                    "jira_issue_url": f"{config.JIRA_URL}/browse/{result.key}",
+                    "summary": issue.get("summary", "")
+                })
+                
+                logger.info(f"Batch issue created: {result.key}")
+                
+            except JIRAError as e:
+                error_msg = f"Jira API error: {e.text if hasattr(e, 'text') else str(e)}"
+                logger.error(f"Failed to create issue at index {idx}: {error_msg}")
+                failed.append({
+                    "index": idx,
+                    "error": error_msg,
+                    "summary": issue.get("summary", "")
+                })
+                await asyncio.sleep(2)  # Retry spacing to avoid 429 throttling
+                
+            except Exception as e:
+                error_msg = f"Unexpected error: {str(e)}"
+                logger.error(f"Failed to create issue at index {idx}: {error_msg}")
+                failed.append({
+                    "index": idx,
+                    "error": error_msg,
+                    "summary": issue.get("summary", "")
+                })
+                await asyncio.sleep(2)
+        
+        logger.info(f"Batch creation completed: {len(created)} created, {len(failed)} failed")
+        return {
+            "success": True,
+            "created": created,
+            "failed": failed,
+            "total_created": len(created),
+            "total_failed": len(failed)
+        }
 
 
 # Singleton instance

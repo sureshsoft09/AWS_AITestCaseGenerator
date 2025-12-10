@@ -1,11 +1,11 @@
 """
 Jira MCP Server
-Provides Model Context Protocol tools for Jira operations.
+Provides Model Context Protocol tools for Jira operations using FastMCP.
 """
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
-from typing import Dict, List, Any, Optional
+import threading
+from typing import Dict, Any, Optional, List
 from dotenv import load_dotenv
+from mcp.server import FastMCP
 
 from config import config
 from logger import logger
@@ -14,203 +14,173 @@ from jira_client import jira_client
 # Load environment variables
 load_dotenv()
 
-app = FastAPI(
-    title="Jira MCP Server",
-    description="Model Context Protocol server for Jira operations",
-    version="1.0.0"
-)
-
-
-# Request/Response Models
-class CreateIssueRequest(BaseModel):
-    """Request model for create_issue."""
-    project_key: str = Field(..., description="Jira project key (e.g., 'MED')")
-    issue_type: str = Field(..., description="Issue type (e.g., 'Epic', 'Story', 'Task')")
-    summary: str = Field(..., description="Issue summary/title")
-    description: str = Field(..., description="Issue description")
-    fields: Optional[Dict[str, Any]] = Field(None, description="Additional fields")
-
-
-class UpdateIssueRequest(BaseModel):
-    """Request model for update_issue."""
-    issue_key: str = Field(..., description="Issue key (e.g., 'MED-123')")
-    fields: Dict[str, Any] = Field(..., description="Fields to update")
-
-
-class DeleteIssueRequest(BaseModel):
-    """Request model for delete_issue."""
-    issue_key: str = Field(..., description="Issue key (e.g., 'MED-123')")
-
-
-class GetIssueRequest(BaseModel):
-    """Request model for get_issue."""
-    issue_key: str = Field(..., description="Issue key (e.g., 'MED-123')")
-
-
-class SearchIssuesRequest(BaseModel):
-    """Request model for search_issues."""
-    jql_query: str = Field(..., description="JQL query string")
-    max_results: int = Field(50, description="Maximum results to return")
-    start_at: int = Field(0, description="Starting index for pagination")
-
-
-# Health Check Endpoints
-@app.get("/")
-async def root():
-    """Root endpoint."""
-    return {
-        "service": "Jira MCP Server",
-        "status": "running",
-        "version": "1.0.0",
-        "jira_url": config.JIRA_URL
-    }
-
-
-@app.get("/health")
-async def health():
-    """Health check endpoint."""
-    return {
-        "status": "healthy",
-        "service": "jira-mcp-server",
-        "jira_url": config.JIRA_URL,
-        "configured": bool(jira_client.client)
-    }
+# Create an MCP server
+mcp = FastMCP("Jira MCP Server")
 
 
 # MCP Tools
-@app.post("/tools/create_issue")
-async def create_issue(request: CreateIssueRequest):
+@mcp.tool(description="Create a Jira issue with specified details")
+def create_issue(
+    project_key: str,
+    issue_type: str,
+    summary: str,
+    description: str,
+    fields: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """
     Create a Jira issue.
     
     Args:
-        request: Issue details
+        project_key: Jira project key (e.g., 'MED')
+        issue_type: Issue type (e.g., 'Epic', 'Story', 'Task')
+        summary: Issue summary/title
+        description: Issue description
+        fields: Additional custom fields (optional)
         
     Returns:
         Issue key, ID, and URL
     """
-    logger.info(f"create_issue called: {request.project_key}/{request.issue_type}")
+    logger.info(f"create_issue called: {project_key}/{issue_type}")
     result = jira_client.create_issue(
-        project_key=request.project_key,
-        issue_type=request.issue_type,
-        summary=request.summary,
-        description=request.description,
-        fields=request.fields
+        project_key=project_key,
+        issue_type=issue_type,
+        summary=summary,
+        description=description,
+        fields=fields
     )
-    
-    if not result.get("success"):
-        raise HTTPException(status_code=500, detail=result.get("error"))
-    
     return result
 
 
-@app.post("/tools/update_issue")
-async def update_issue(request: UpdateIssueRequest):
+@mcp.tool(description="Update an existing Jira issue")
+def update_issue(issue_key: str, fields: Dict[str, Any]) -> Dict[str, Any]:
     """
     Update a Jira issue.
     
     Args:
-        request: Issue key and fields to update
+        issue_key: Issue key (e.g., 'MED-123')
+        fields: Fields to update as key-value pairs
         
     Returns:
         Success status
     """
-    logger.info(f"update_issue called: {request.issue_key}")
+    logger.info(f"update_issue called: {issue_key}")
     result = jira_client.update_issue(
-        issue_key=request.issue_key,
-        fields=request.fields
+        issue_key=issue_key,
+        fields=fields
     )
-    
-    if not result.get("success"):
-        raise HTTPException(status_code=500, detail=result.get("error"))
-    
     return result
 
 
-@app.post("/tools/delete_issue")
-async def delete_issue(request: DeleteIssueRequest):
+@mcp.tool(description="Delete a Jira issue")
+def delete_issue(issue_key: str) -> Dict[str, Any]:
     """
     Delete a Jira issue.
     
     Args:
-        request: Issue key
+        issue_key: Issue key (e.g., 'MED-123')
         
     Returns:
         Success status
     """
-    logger.info(f"delete_issue called: {request.issue_key}")
-    result = jira_client.delete_issue(request.issue_key)
-    
-    if not result.get("success"):
-        raise HTTPException(status_code=500, detail=result.get("error"))
-    
+    logger.info(f"delete_issue called: {issue_key}")
+    result = jira_client.delete_issue(issue_key)
     return result
 
 
-@app.post("/tools/get_issue")
-async def get_issue(request: GetIssueRequest):
+@mcp.tool(description="Get details of a Jira issue")
+def get_issue(issue_key: str) -> Dict[str, Any]:
     """
     Get a Jira issue.
     
     Args:
-        request: Issue key
+        issue_key: Issue key (e.g., 'MED-123')
         
     Returns:
-        Issue details
+        Issue details including summary, status, assignee, etc.
     """
-    logger.info(f"get_issue called: {request.issue_key}")
-    result = jira_client.get_issue(request.issue_key)
-    
-    if not result.get("success"):
-        raise HTTPException(status_code=500, detail=result.get("error"))
-    
+    logger.info(f"get_issue called: {issue_key}")
+    result = jira_client.get_issue(issue_key)
     return result
 
 
-@app.post("/tools/search_issues")
-async def search_issues(request: SearchIssuesRequest):
+@mcp.tool(description="Search for Jira issues using JQL (Jira Query Language)")
+def search_issues(
+    jql_query: str,
+    max_results: int = 50,
+    start_at: int = 0
+) -> Dict[str, Any]:
     """
     Search for Jira issues using JQL.
     
     Args:
-        request: JQL query and pagination parameters
+        jql_query: JQL query string (e.g., 'project = MED AND status = Open')
+        max_results: Maximum number of results to return (default: 50)
+        start_at: Starting index for pagination (default: 0)
         
     Returns:
-        List of matching issues
+        List of matching issues with their details
     """
-    logger.info(f"search_issues called: {request.jql_query}")
+    logger.info(f"search_issues called: {jql_query}")
     result = jira_client.search_issues(
-        jql_query=request.jql_query,
-        max_results=request.max_results,
-        start_at=request.start_at
+        jql_query=jql_query,
+        max_results=max_results,
+        start_at=start_at
     )
-    
-    if not result.get("success"):
-        raise HTTPException(status_code=500, detail=result.get("error"))
-    
     return result
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize on startup."""
-    logger.info("Jira MCP Server starting up")
+@mcp.tool(description="Create multiple Jira issues in batch operation")
+async def create_issues_batch(
+    jira_issues: List[Dict[str, Any]],
+    project_key: str
+) -> Dict[str, Any]:
+    """
+    Create multiple Jira issues in batch.
+    
+    Args:
+        jira_issues: List of issue dictionaries, each containing:
+            - summary: Issue title/summary (required)
+            - description: Issue description (required)
+            - issue_type: Type of issue (e.g., 'Epic', 'Story', 'Task') (required)
+            - fields: Additional custom fields (optional)
+        project_key: Jira project key (e.g., 'MED', 'TEST')
+        
+    Returns:
+        Dictionary containing lists of created and failed issues with their details
+        
+    Example:
+        jira_issues = [
+            {
+                "summary": "Implement user authentication",
+                "description": "Add OAuth2 authentication",
+                "issue_type": "Story"
+            },
+            {
+                "summary": "Fix login bug",
+                "description": "Users cannot login with special characters",
+                "issue_type": "Bug"
+            }
+        ]
+    """
+    logger.info(f"create_issues_batch called: {len(jira_issues)} issues for project {project_key}")
+    result = await jira_client.create_issues_in_batch(
+        jira_issues=jira_issues,
+        project_key=project_key
+    )
+    return result
+
+
+def main():
+    """Run the MCP server."""
+    logger.info("Starting Jira MCP Server")
     logger.info(f"Jira URL: {config.JIRA_URL}")
     logger.info(f"Client configured: {bool(jira_client.client)}")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown."""
-    logger.info("Jira MCP Server shutting down")
+    
+    mcp.run(transport="streamable-http")
 
 
 if __name__ == "__main__":
-    import uvicorn
-    
-    uvicorn.run(
-        app,
-        host=config.HOST,
-        port=config.PORT,
-        log_level=config.LOG_LEVEL.lower()
-    )
+    # Run in a separate thread
+    thread = threading.Thread(target=main)
+    thread.start()
+

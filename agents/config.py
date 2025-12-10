@@ -28,6 +28,10 @@ class AgentConfig:
     
     # Environment
     ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
+    
+    # Jira MCP Server Configuration
+    JIRA_MCP_SERVER_URL = os.getenv('JIRA_MCP_SERVER_URL', 'http://localhost:8001/mcp')
+    JIRA_PROJECT_KEY = os.getenv('JIRA_PROJECT_KEY', 'HS25SKL')
 
 
 # Create singleton instance

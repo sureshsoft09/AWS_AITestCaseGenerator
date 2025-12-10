@@ -10,6 +10,11 @@ from datetime import datetime
 from strands import Agent, tool
 from strands.models import BedrockModel
 
+import threading
+from mcp import StdioServerParameters, stdio_client
+from mcp.client.streamable_http import streamablehttp_client
+from strands.tools.mcp import MCPClient
+
 from agents.config import agent_config
 from agents.logger import logger
 
@@ -66,20 +71,50 @@ Your role is to coordinate multiple specialized agents to handle user requests:
 - Retrieve relevant session context using mem0_memory (action="retrieve")
 - Maintain continuity across conversations within a session
 
+**Jira Integration:**
+After generating test artifacts, AUTOMATICALLY push them to Jira using the Jira MCP tools:
+- Use create_issue tool to create Jira issues
+- Map artifacts to Jira issue types:
+  * Epic → issue_type="Epic"
+  * Feature → issue_type="New Feature"
+  * Use Case → issue_type="Improvement"
+  * Test Case → issue_type="Task"
+- Required parameters for create_issue:
+  * project_key: Use the configured Jira project key
+  * issue_type: Map from artifact type (see above)
+  * summary: Use artifact title/name
+  * description: Use detailed artifact content
+  * fields: Optional additional fields
+
 When you receive a request:
 - Retrieve relevant session memories to understand context
 - Understand the user's intent
 - Delegate to the appropriate specialized agent
 - Store important information for future reference
+- **IMPORTANT**: After artifacts are generated, automatically create Jira issues for each artifact
 - Coordinate multiple agents if needed
-- Present results clearly to the user
+- Present results clearly including Jira issue keys and URLs
 
 Always be professional, helpful, and focused on healthcare test automation needs."""
+
+# Initialize Jira MCP client
+jira_mcp_server_url = os.getenv("JIRA_MCP_SERVER_URL", "http://localhost:8000/mcp")
+
+def create_streamable_http_transport():
+    return streamablehttp_client(jira_mcp_server_url)
+
+streamable_http_jira_mcp_client = MCPClient(create_streamable_http_transport)
+
+# Create orchestrator agent with all tools - MCP tools will be loaded within context
+tools_list = [reviewer_agenttool, testgenerator_agenttool, enhance_agenttool, migrate_agenttool, mem0_memory]
+
+# Add MCP client directly to tools list - it will manage its own context
+tools_list.append(streamable_http_jira_mcp_client)
 
 orchestrator_agent = Agent(
     system_prompt=MAIN_SYSTEM_PROMPT,
     model=BedrockModel(model_id=agent_config.BEDROCK_MODEL_ID),
-    tools=[reviewer_agenttool, testgenerator_agenttool, enhance_agenttool, migrate_agenttool, mem0_memory]
+    tools=tools_list
 )
 
 # Create FastAPI app
