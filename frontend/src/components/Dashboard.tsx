@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import './Dashboard.css';
+import '../styles/Dashboard.css';
 import { extractErrorMessage } from '../utils/errorHandler';
 
 interface Project {

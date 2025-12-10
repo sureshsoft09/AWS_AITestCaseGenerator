@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
-import './Generate.css';
+import '../styles/Generate.css';
 import { extractErrorMessage } from '../utils/errorHandler';
 
 interface Message {
@@ -293,8 +293,8 @@ const Generate: React.FC = () => {
   return (
     <div className="generate-container">
       <header className="generate-header">
-        <h1>Generate Test Artifacts</h1>
-        <p>Upload requirements documents and generate comprehensive test artifacts</p>
+        <h1 className="generate-title">✨ Generate Test Artifacts</h1>
+        <p className="generate-subtitle">Upload requirements documents and generate comprehensive test artifacts</p>
       </header>
 
       {error && (

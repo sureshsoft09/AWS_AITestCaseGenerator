@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import './Enhance.css';
+import '../styles/Enhance.css';
 import { extractErrorMessage } from '../utils/errorHandler';
 
 interface Project {
