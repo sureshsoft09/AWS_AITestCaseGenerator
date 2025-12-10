@@ -6,17 +6,10 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, status
 from pydantic import BaseModel
 from backend.logger import logger
-
-# Import agents
-import sys
-sys.path.insert(0, '.')
-from agents import MigrationAgent
+from backend.services.agent_client import agent_client
 
 
 router = APIRouter(prefix="/api/migrate", tags=["migrate"])
-
-# Initialize Migration Agent
-migration_agent = MigrationAgent()
 
 
 class MigrateUploadResponse(BaseModel):

@@ -50,11 +50,11 @@ class AgentClient:
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(
-                    f"{self.base_url}/api/agents/process",
+                    f"{self.base_url}/processquery",
                     json={
                         "session_id": session_id,
                         "user_query": user_query,
-                        "load_session_context": load_session_context
+                        "context": {}
                     }
                 )
                 

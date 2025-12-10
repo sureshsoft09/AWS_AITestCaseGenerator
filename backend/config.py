@@ -34,27 +34,19 @@ class Config:
     OPENSEARCH_USERNAME: str = os.getenv("OPENSEARCH_USERNAME", "admin")
     OPENSEARCH_PASSWORD: str = os.getenv("OPENSEARCH_PASSWORD", "")
     
-    # Jira Configuration
-    JIRA_URL: str = os.getenv("JIRA_URL", "")
-    JIRA_API_TOKEN: str = os.getenv("JIRA_API_TOKEN", "")
-    JIRA_EMAIL: str = os.getenv("JIRA_EMAIL", "")
-    
-    # Bedrock Configuration
-    BEDROCK_MODEL_ID: str = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-v2")
-    BEDROCK_REGION: str = os.getenv("BEDROCK_REGION", "us-east-1")
-    
     # Application Configuration
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
+    BACKEND_PORT: int = int(os.getenv("BACKEND_PORT", "3000"))
     
     # Email Notification (SES)
     NOTIFICATION_FROM_EMAIL: str = os.getenv("NOTIFICATION_FROM_EMAIL", "noreply@medassure.com")
     SES_SENDER_EMAIL: str = os.getenv("SES_SENDER_EMAIL", "noreply@medassure.com")
     SES_REGION: str = os.getenv("SES_REGION", "us-east-1")
     
-    # MCP Server Endpoints
-    JIRA_MCP_SERVER_URL: str = os.getenv("JIRA_MCP_SERVER_URL", "http://localhost:8001")
-    DYNAMODB_MCP_SERVER_URL: str = os.getenv("DYNAMODB_MCP_SERVER_URL", "http://localhost:8002")
+    # Agents Service Configuration
+    # Backend connects to agents service which handles all agent operations including Jira/DynamoDB
+    AGENTS_SERVICE_URL: str = os.getenv("AGENTS_SERVICE_URL", "http://localhost:8001")
     
     # Authentication Configuration (Cognito)
     COGNITO_USER_POOL_ID: str = os.getenv("COGNITO_USER_POOL_ID", "")

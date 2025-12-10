@@ -6,17 +6,10 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from backend.logger import logger
-
-# Import agents
-import sys
-sys.path.insert(0, '.')
-from agents import EnhancementAgent
+from backend.services.agent_client import agent_client
 
 
 router = APIRouter(prefix="/api/enhance", tags=["enhance"])
-
-# Initialize Enhancement Agent
-enhancement_agent = EnhancementAgent()
 
 
 class EnhanceStartRequest(BaseModel):
