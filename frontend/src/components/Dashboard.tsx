@@ -31,7 +31,7 @@ interface Artifact {
   children?: Artifact[];
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8002';
 
 const Dashboard: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);

@@ -33,7 +33,7 @@ interface ReviewResponse {
   test_generation_status?: any;
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8002';
 
 const Generate: React.FC = () => {
   // Form state
