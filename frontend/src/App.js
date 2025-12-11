@@ -5,7 +5,6 @@ import CssBaseline from '@mui/material/CssBaseline';
 
 // Layout Components
 import Layout from './components/layout/Layout';
-import ChatBot from './components/ChatBot';
 
 // Page Components
 import Dashboard from './pages/Dashboard';
@@ -118,7 +117,6 @@ function App() {
               <Route path="/analytics" element={<AnalyticsReport />} />
             </Routes>
           </Layout>
-          <ChatBot />
         </Router>
       </NotificationProvider>
     </ThemeProvider>
