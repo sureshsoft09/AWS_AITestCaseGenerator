@@ -25,6 +25,7 @@ class Config:
     # S3 Configuration
     S3_INGEST_BUCKET: str = os.getenv("S3_INGEST_BUCKET", "medassure-ingest-bucket")
     S3_FRONTEND_BUCKET: str = os.getenv("S3_FRONTEND_BUCKET", "medassure-frontend-bucket")
+    S3_BUCKET_NAME: str = os.getenv("S3_BUCKET_NAME", os.getenv("S3_INGEST_BUCKET", "medassure-ingest-bucket"))
     
     # DynamoDB Configuration
     DYNAMODB_TABLE_NAME: str = os.getenv("DYNAMODB_TABLE_NAME", "MedAssureAI_Artifacts")

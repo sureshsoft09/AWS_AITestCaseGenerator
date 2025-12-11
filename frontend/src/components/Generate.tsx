@@ -17,6 +17,22 @@ interface ArtifactEstimate {
   total: number;
 }
 
+interface ReadinessPlan {
+  estimated_epics: number;
+  estimated_features: number;
+  estimated_use_cases: number;
+  estimated_test_cases: number;
+  overall_status: string;
+}
+
+interface ReviewResponse {
+  readiness_plan?: ReadinessPlan;
+  status?: string;
+  next_action?: string;
+  assistant_response?: string[];
+  test_generation_status?: any;
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
 
 const Generate: React.FC = () => {
@@ -42,6 +58,8 @@ const Generate: React.FC = () => {
   
   // Estimation state
   const [artifactEstimate, setArtifactEstimate] = useState<ArtifactEstimate | null>(null);
+  const [readinessPlan, setReadinessPlan] = useState<ReadinessPlan | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<string>('');
   
   // Status state
   const [loading, setLoading] = useState(false);
@@ -51,10 +69,26 @@ const Generate: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // Generate session ID on component mount
+  useEffect(() => {
+    const newSessionId = generateSessionId();
+    setSessionId(newSessionId);
+    console.log('Generated session ID for Generate tab:', newSessionId);
+  }, []);
+
   // Auto-scroll chat to bottom
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Generate unique session ID
+  const generateSessionId = (): string => {
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(2, 15);
+    const userAgent = navigator.userAgent;
+    const hash = btoa(`${timestamp}-${random}-${userAgent}`).substring(0, 32);
+    return `session_${hash}_${timestamp}`;
+  };
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -87,6 +121,11 @@ const Generate: React.FC = () => {
       return;
     }
 
+    if (!sessionId) {
+      setError('Session ID not initialized');
+      return;
+    }
+
     setLoading(true);
     setError('');
     setPhase('upload');
@@ -99,6 +138,9 @@ const Generate: React.FC = () => {
       selectedFiles.forEach(file => {
         formData.append('files', file);
       });
+      
+      // Add session ID
+      formData.append('session_id', sessionId);
       
       // Add project information
       formData.append('project_name', projectName);
@@ -127,7 +169,7 @@ const Generate: React.FC = () => {
       
       setProjectId(projectId);
       
-      // Start review process
+      // Start review process with session ID
       await startReview(uploadId, projectId);
       
     } catch (err: any) {
@@ -145,6 +187,7 @@ const Generate: React.FC = () => {
     
     try {
       const response = await axios.post(`${API_BASE_URL}/api/generate/review`, {
+        session_id: sessionId,
         upload_id: uploadId,
         project_id: projId,
         project_name: projectName,
@@ -152,18 +195,67 @@ const Generate: React.FC = () => {
         notification_email: notificationEmail || undefined
       });
 
-      setSessionId(response.data.session_id);
-      
-      // Add initial review message
-      if (response.data.message) {
-        setMessages([{
-          role: 'assistant',
-          content: response.data.message,
-          timestamp: new Date()
-        }]);
+      // Session ID should remain the same as frontend-generated one
+      if (response.data.session_id !== sessionId) {
+        console.warn('Backend returned different session ID, keeping frontend session ID');
       }
       
-      setPhase('chat');
+      // Parse the JSON response from agent
+      let reviewData: ReviewResponse | null = null;
+      if (response.data.message) {
+        try {
+          reviewData = JSON.parse(response.data.message);
+        } catch (e) {
+          console.error('Failed to parse review response as JSON:', e);
+          // Fallback to plain text message
+          setMessages([{
+            role: 'assistant',
+            content: response.data.message,
+            timestamp: new Date()
+          }]);
+        }
+      }
+      
+      if (reviewData) {
+        // Extract readiness plan
+        if (reviewData.readiness_plan) {
+          setReadinessPlan(reviewData.readiness_plan);
+          // Also set artifact estimate for consistency
+          const plan = reviewData.readiness_plan;
+          setArtifactEstimate({
+            epics: plan.estimated_epics,
+            features: plan.estimated_features,
+            use_cases: plan.estimated_use_cases,
+            test_cases: plan.estimated_test_cases,
+            total: plan.estimated_epics + plan.estimated_features + 
+                   plan.estimated_use_cases + plan.estimated_test_cases
+          });
+        }
+        
+        // Set review status
+        if (reviewData.status) {
+          setReviewStatus(reviewData.status);
+        }
+        
+        // Add assistant responses as messages
+        if (reviewData.assistant_response && Array.isArray(reviewData.assistant_response)) {
+          const assistantMessages: Message[] = reviewData.assistant_response.map((msg, idx) => ({
+            role: 'assistant',
+            content: msg,
+            timestamp: new Date(Date.now() + idx * 100) // Slight offset for ordering
+          }));
+          setMessages(assistantMessages);
+        }
+        
+        // Enable chat if status is review_in_progress
+        if (reviewData.status === 'review_in_progress') {
+          setPhase('chat');
+        } else {
+          setPhase('review');
+        }
+      } else {
+        setPhase('chat');
+      }
       
     } catch (err: any) {
       setError(extractErrorMessage(err, 'Failed to start review'));
@@ -192,26 +284,62 @@ const Generate: React.FC = () => {
         user_message: newMessage.content
       });
 
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: response.data.agent_response,
-        timestamp: new Date()
-      };
-
-      setMessages(prev => [...prev, assistantMessage]);
+      // Try to parse response as JSON
+      let chatData: ReviewResponse | null = null;
+      let responseText = response.data.agent_response;
       
-      // Check if response contains estimation
-      if (response.data.agent_response.includes('estimate') || 
-          response.data.agent_response.includes('Epic') ||
-          response.data.agent_response.includes('Feature')) {
-        // Parse estimation from response (simplified)
-        setArtifactEstimate({
-          epics: 3,
-          features: 8,
-          use_cases: 15,
-          test_cases: 45,
-          total: 71
-        });
+      try {
+        chatData = JSON.parse(responseText);
+      } catch (e) {
+        // Not JSON, use as plain text
+        console.log('Chat response is plain text, not JSON');
+      }
+      
+      if (chatData) {
+        // Update readiness plan if present
+        if (chatData.readiness_plan) {
+          setReadinessPlan(chatData.readiness_plan);
+          const plan = chatData.readiness_plan;
+          setArtifactEstimate({
+            epics: plan.estimated_epics,
+            features: plan.estimated_features,
+            use_cases: plan.estimated_use_cases,
+            test_cases: plan.estimated_test_cases,
+            total: plan.estimated_epics + plan.estimated_features + 
+                   plan.estimated_use_cases + plan.estimated_test_cases
+          });
+        }
+        
+        // Update review status
+        if (chatData.status) {
+          setReviewStatus(chatData.status);
+        }
+        
+        // Add assistant responses as separate messages
+        if (chatData.assistant_response && Array.isArray(chatData.assistant_response)) {
+          const assistantMessages: Message[] = chatData.assistant_response.map((msg, idx) => ({
+            role: 'assistant',
+            content: msg,
+            timestamp: new Date(Date.now() + idx * 100)
+          }));
+          setMessages(prev => [...prev, ...assistantMessages]);
+        } else {
+          // Add single message
+          const assistantMessage: Message = {
+            role: 'assistant',
+            content: responseText,
+            timestamp: new Date()
+          };
+          setMessages(prev => [...prev, assistantMessage]);
+        }
+      } else {
+        // Plain text response
+        const assistantMessage: Message = {
+          role: 'assistant',
+          content: responseText,
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, assistantMessage]);
       }
       
     } catch (err: any) {
@@ -424,7 +552,40 @@ const Generate: React.FC = () => {
           <div className="chat-header">
             <h2>Requirements Review & Clarification</h2>
             <p>Chat with the AI agent to clarify requirements</p>
+            {reviewStatus && (
+              <div className="review-status-badge">
+                Status: {reviewStatus.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+              </div>
+            )}
           </div>
+          
+          {readinessPlan && (
+            <div className="readiness-plan">
+              <h3>Readiness Plan</h3>
+              <div className="estimate-grid">
+                <div className="estimate-item">
+                  <span className="estimate-label">Estimated Epics</span>
+                  <span className="estimate-value">{readinessPlan.estimated_epics}</span>
+                </div>
+                <div className="estimate-item">
+                  <span className="estimate-label">Estimated Features</span>
+                  <span className="estimate-value">{readinessPlan.estimated_features}</span>
+                </div>
+                <div className="estimate-item">
+                  <span className="estimate-label">Estimated Use Cases</span>
+                  <span className="estimate-value">{readinessPlan.estimated_use_cases}</span>
+                </div>
+                <div className="estimate-item">
+                  <span className="estimate-label">Estimated Test Cases</span>
+                  <span className="estimate-value">{readinessPlan.estimated_test_cases}</span>
+                </div>
+                <div className="estimate-item total">
+                  <span className="estimate-label">Overall Status</span>
+                  <span className="estimate-value status-badge">{readinessPlan.overall_status}</span>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="chat-messages">
             {messages.map((msg, index) => (
@@ -455,14 +616,14 @@ const Generate: React.FC = () => {
               type="text"
               value={userMessage}
               onChange={(e) => setUserMessage(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && !isSending && sendMessage()}
-              placeholder="Type your message..."
-              disabled={isSending || loading}
+              onKeyPress={(e) => e.key === 'Enter' && !isSending && phase === 'chat' && sendMessage()}
+              placeholder={phase === 'chat' ? "Type your message..." : "Waiting for review to complete..."}
+              disabled={isSending || loading || phase !== 'chat'}
               className="chat-input"
             />
             <button
               onClick={sendMessage}
-              disabled={!userMessage.trim() || isSending || loading}
+              disabled={!userMessage.trim() || isSending || loading || phase !== 'chat'}
               className="btn-send"
             >
               Send

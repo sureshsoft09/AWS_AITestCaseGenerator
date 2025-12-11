@@ -14,6 +14,7 @@ router = APIRouter(prefix="/api/generate", tags=["generate"])
 
 class ReviewRequest(BaseModel):
     """Request model for requirements review."""
+    session_id: str
     upload_id: str
     project_id: str
     project_name: str
@@ -74,23 +75,25 @@ async def review_requirements(request: ReviewRequest):
     Trigger requirements review by Review Agent.
     
     This endpoint:
-    1. Creates a new session in OpenSearch
-    2. Retrieves extracted text from uploaded documents
-    3. Sends requirements to Review Agent for analysis
-    4. Returns session ID for continued interaction
+    1. Uses session ID from frontend
+    2. Retrieves uploaded files from S3
+    3. Extracts text using AWS Textract
+    4. Sends requirements to Review Agent for analysis
+    5. Returns analysis results
     
     Args:
-        request: Review request with upload and project details
+        request: Review request with session ID, upload and project details
         
     Returns:
         Review response with session ID and initial analysis
     """
-    import uuid
     from backend.services.session_service import session_service
+    from backend.services.textract_service import textract_service
+    from backend.services.file_upload_service import file_upload_service
     
     try:
-        # Generate session ID
-        session_id = str(uuid.uuid4())
+        # Use session ID provided by frontend
+        session_id = request.session_id
         
         logger.info(
             "Starting requirements review",
@@ -115,22 +118,104 @@ async def review_requirements(request: ReviewRequest):
             }
         )
         
-        # Retrieve extracted text from documents
-        # In production, this would get text from Textract results
-        requirements_text = _get_extracted_text(request.upload_id, request.project_id)
+        # Get uploaded file S3 keys from upload_id
+        # In production, retrieve this from database/session storage
+        s3_keys = _get_s3_keys_for_upload(request.upload_id, request.project_id)
+        
+        # Extract text from documents using Textract
+        logger.info(
+            "Extracting text from documents",
+            extra={"session_id": session_id, "file_count": len(s3_keys)}
+        )
+        
+        if len(s3_keys) == 0:
+            # Fallback to sample text if no files found
+            requirements_text = _get_sample_requirements()
+        elif len(s3_keys) == 1:
+            # Single document
+            requirements_text = textract_service.extract_text_from_s3(s3_keys[0])
+        else:
+            # Multiple documents
+            requirements_text = textract_service.extract_text_from_multiple_documents(s3_keys)
+        
+        logger.info(
+            "Text extraction completed",
+            extra={
+                "session_id": session_id,
+                "text_length": len(requirements_text)
+            }
+        )
         
         # Send to Review Agent via HTTP
         review_result = await agent_client.process_request(
             session_id=session_id,
-            user_query=f"Please analyze these requirements:\n\n{requirements_text}",
+            user_query=f"""Please only review and analyze these requirements:
+
+            Project ID - {request.project_id}
+            Project Name - {request.project_name}
+            Jira Project Key - {request.jira_project_key}
+            Notification Email - {request.notification_email}
+
+            ### OUTPUT FORMAT (INTERACTIVE RESPONSE)
+            {{
+                "readiness_plan": {{
+                    "estimated_epics": 0,
+                    "estimated_features": 0,
+                    "estimated_use_cases": 0,
+                    "estimated_test_cases": 0,
+                    "overall_status": "Clarifications Needed"
+                }},
+                "status": "review_in_progress",
+                "next_action": "await_user_clarifications",
+                "assistant_response": [
+                    "Requirement REQ-12 is vague. Please specify acceptable response time (e.g., in seconds).",
+                    "Requirement REQ-27 mentions compliance but does not specify which standard — please confirm if FDA or IEC 62304 applies."
+                ],
+                "test_generation_status": {{}},
+                "next_action": "Awaiting user clarifications or confirmation for pending items."
+            }}
+
+            EXTRACTED CONTENT:
+            {requirements_text}
+            """,
             load_session_context=True
         )
+        
+        # Log the review result
+        logger.info(
+            "Review result from agent",
+            extra={
+                "session_id": session_id,
+                "review_result": review_result
+            }
+        )
+        print(f"\n{'='*80}")
+        print(f"REVIEW RESULT FOR SESSION: {session_id}")
+        print(f"{'='*80}")
+        print(f"Review Result: {review_result}")
+        print(f"{'='*80}\n")
+        
+        # Extract agent response text from review_result
+        agent_response_text = ""
+        data = review_result.get("data", {})
+        
+        if isinstance(data, dict):
+            content = data.get("content", [])
+            if isinstance(content, list) and len(content) > 0:
+                # Get text from first content item
+                first_content = content[0]
+                if isinstance(first_content, dict):
+                    agent_response_text = first_content.get("text", "")
+            
+            # Fallback to answer field if content.text not found
+            if not agent_response_text:
+                agent_response_text = data.get("answer", "")
         
         # Store agent response in session
         session_service.append_message(
             session_id=session_id,
             role="assistant",
-            content=review_result.get("data", {}).get("answer", "")
+            content=agent_response_text
         )
         
         logger.info(
@@ -142,14 +227,14 @@ async def review_requirements(request: ReviewRequest):
             "session_id": session_id,
             "project_id": request.project_id,
             "status": "review_completed" if review_result.get("success") else "review_failed",
-            "message": review_result.get("data", {}).get("answer", "Review completed"),
+            "message": agent_response_text,
             "analysis": review_result.get("metadata", {})
         }
         
     except Exception as e:
         logger.error(
             "Requirements review failed",
-            extra={"project_id": request.project_id, "error": str(e)}
+            extra={"project_id": request.project_id, "session_id": request.session_id, "error": str(e)}
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -205,12 +290,27 @@ async def chat_with_agent(request: ChatRequest):
             load_session_context=True
         )
         
+        # Extract agent response text from result
+        agent_response_text = ""
+        data = result.get("data", {})
+        
+        if isinstance(data, dict):
+            content = data.get("content", [])
+            if isinstance(content, list) and len(content) > 0:
+                # Get text from first content item
+                first_content = content[0]
+                if isinstance(first_content, dict):
+                    agent_response_text = first_content.get("text", "")
+            
+            # Fallback to answer field if content.text not found
+            if not agent_response_text:
+                agent_response_text = data.get("answer", "")
+        
         # Store agent response
-        agent_response = result.get("data", {}).get("answer", "")
         session_service.append_message(
             session_id=request.session_id,
             role="assistant",
-            content=agent_response
+            content=agent_response_text
         )
         
         logger.info(
@@ -220,7 +320,7 @@ async def chat_with_agent(request: ChatRequest):
         
         return {
             "session_id": request.session_id,
-            "agent_response": agent_response,
+            "agent_response": agent_response_text,
             "status": "success" if result.get("success") else "error"
         }
         
@@ -291,21 +391,18 @@ async def execute_generation(request: ExecuteRequest):
         # Get clarified requirements from session messages
         requirements_text = _extract_requirements_from_session(session)
         
-        # Trigger Test Generator Agent
-        generation_result = test_generator_agent.run(
-            user_input=f"Generate test artifacts from these requirements:\n\n{requirements_text}",
-            context={
-                "session_id": request.session_id,
-                "project_id": request.project_id,
-                **session.get("context", {})
-            }
+        # Trigger Test Generator Agent via HTTP
+        generation_result = await agent_client.process_request(
+            session_id=request.session_id,
+            user_query=f"Generate test artifacts from these requirements:\n\n{requirements_text}",
+            load_session_context=True
         )
         
         # Store generation result
         session_service.append_message(
             session_id=request.session_id,
             role="assistant",
-            content=generation_result.get("answer", "")
+            content=generation_result.get("data", {}).get("answer", "")
         )
         
         # Update session status
@@ -425,10 +522,84 @@ def _get_extracted_text(upload_id: str, project_id: str) -> str:
     """
     Get extracted text from uploaded documents.
     
-    In production, this would retrieve Textract results from S3 or database.
-    For now, returns sample text.
+    DEPRECATED: Use _get_s3_keys_for_upload and textract_service instead.
     """
-    # Simulate extracted text
+    return _get_sample_requirements()
+
+
+def _get_s3_keys_for_upload(upload_id: str, project_id: str) -> list:
+    """
+    Get S3 keys for files associated with an upload.
+    
+    Queries DynamoDB to get the S3 keys stored during upload.
+    
+    Args:
+        upload_id: Upload identifier
+        project_id: Project identifier
+        
+    Returns:
+        List of S3 keys
+    """
+    import boto3
+    from backend.config import config
+    
+    try:
+        dynamodb = boto3.client(
+            'dynamodb',
+            region_name=config.AWS_REGION,
+            aws_access_key_id=config.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=config.AWS_SECRET_ACCESS_KEY
+        )
+        
+        # Query for upload mapping
+        response = dynamodb.get_item(
+            TableName=config.DYNAMODB_TABLE_NAME,
+            Key={
+                'PK': {'S': f'UPLOAD#{upload_id}'},
+                'SK': {'S': 'MAPPING'}
+            }
+        )
+        
+        if 'Item' in response:
+            s3_keys_list = response['Item'].get('s3_keys', {}).get('L', [])
+            s3_keys = [item['S'] for item in s3_keys_list]
+            
+            logger.info(
+                "Retrieved S3 keys for upload",
+                extra={
+                    "upload_id": upload_id,
+                    "project_id": project_id,
+                    "key_count": len(s3_keys)
+                }
+            )
+            
+            return s3_keys
+        else:
+            logger.warning(
+                "No S3 keys found for upload, using sample requirements",
+                extra={"upload_id": upload_id, "project_id": project_id}
+            )
+            return []
+            
+    except Exception as e:
+        logger.error(
+            "Failed to retrieve S3 keys from DynamoDB",
+            extra={
+                "upload_id": upload_id,
+                "project_id": project_id,
+                "error": str(e)
+            }
+        )
+        return []
+
+
+def _get_sample_requirements() -> str:
+    """
+    Get sample requirements text for testing.
+    
+    Returns:
+        Sample requirements document text
+    """
     return """
     Sample Requirements Document
     
