@@ -8,6 +8,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from backend.logger import logger
 import io
+import boto3
+from botocore.exceptions import ClientError
+from backend.config import config
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -26,6 +29,16 @@ class ProjectListResponse(BaseModel):
     """Response model for project list."""
     projects: List[Project]
     total_count: int
+
+
+class ProjectArtifactsResponse(BaseModel):
+    """Response model for project artifacts from DynamoDB."""
+    success: bool
+    project_id: str
+    project_name: Optional[str] = None
+    metadata: Optional[dict] = None
+    hierarchy: Optional[dict] = None
+    error: Optional[str] = None
 
 
 class Artifact(BaseModel):
@@ -48,6 +61,310 @@ class ArtifactTreeResponse(BaseModel):
     project_name: str
     artifacts: List[Artifact]
     total_count: int
+
+
+@router.get("/list", response_model=ProjectListResponse)
+async def get_projects_list():
+    """
+    Get list of all projects from DynamoDB.
+    Returns basic project information for dropdown selection.
+    """
+    try:
+        logger.info("Fetching projects list from DynamoDB")
+        
+        # Initialize DynamoDB client
+        dynamodb = boto3.client(
+            'dynamodb',
+            region_name=config.AWS_REGION
+        )
+        
+        table_name = config.DYNAMODB_TABLE_NAME
+        
+        # Scan table to find all METADATA items (each project has one METADATA record)
+        response = dynamodb.scan(
+            TableName=table_name,
+            FilterExpression='SK = :sk',
+            ExpressionAttributeValues={
+                ':sk': {'S': 'METADATA'}
+            }
+        )
+        
+        projects = []
+        for item in response.get('Items', []):
+            try:
+                # Parse project metadata
+                project = {
+                    'project_id': item.get('project_id', {}).get('S', ''),
+                    'project_name': item.get('project_name', {}).get('S', ''),
+                    'jira_project_key': item.get('jira_project_key', {}).get('S', ''),
+                    'created_at': item.get('created_at', {}).get('S', ''),
+                    'updated_at': item.get('updated_at', {}).get('S', ''),
+                    'artifact_counts': {}
+                }
+                
+                # Parse artifact counts if present
+                if 'artifact_counts' in item and 'M' in item['artifact_counts']:
+                    counts_map = item['artifact_counts']['M']
+                    project['artifact_counts'] = {
+                        'epics': int(counts_map.get('epics', {}).get('N', '0')),
+                        'features': int(counts_map.get('features', {}).get('N', '0')),
+                        'use_cases': int(counts_map.get('use_cases', {}).get('N', '0')),
+                        'test_cases': int(counts_map.get('test_cases', {}).get('N', '0'))
+                    }
+                
+                projects.append(project)
+                
+            except Exception as e:
+                logger.error(f"Error parsing project item: {str(e)}")
+                continue
+        
+        # Handle pagination if needed
+        while 'LastEvaluatedKey' in response:
+            response = dynamodb.scan(
+                TableName=table_name,
+                FilterExpression='SK = :sk',
+                ExpressionAttributeValues={
+                    ':sk': {'S': 'METADATA'}
+                },
+                ExclusiveStartKey=response['LastEvaluatedKey']
+            )
+            
+            for item in response.get('Items', []):
+                try:
+                    project = {
+                        'project_id': item.get('project_id', {}).get('S', ''),
+                        'project_name': item.get('project_name', {}).get('S', ''),
+                        'jira_project_key': item.get('jira_project_key', {}).get('S', ''),
+                        'created_at': item.get('created_at', {}).get('S', ''),
+                        'updated_at': item.get('updated_at', {}).get('S', ''),
+                        'artifact_counts': {}
+                    }
+                    
+                    if 'artifact_counts' in item and 'M' in item['artifact_counts']:
+                        counts_map = item['artifact_counts']['M']
+                        project['artifact_counts'] = {
+                            'epics': int(counts_map.get('epics', {}).get('N', '0')),
+                            'features': int(counts_map.get('features', {}).get('N', '0')),
+                            'use_cases': int(counts_map.get('use_cases', {}).get('N', '0')),
+                            'test_cases': int(counts_map.get('test_cases', {}).get('N', '0'))
+                        }
+                    
+                    projects.append(project)
+                    
+                except Exception as e:
+                    logger.error(f"Error parsing project item: {str(e)}")
+                    continue
+        
+        logger.info(f"Found {len(projects)} projects")
+        
+        return {
+            "projects": projects,
+            "total_count": len(projects)
+        }
+        
+    except ClientError as e:
+        logger.error(f"DynamoDB error fetching projects list: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch projects list: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Error fetching projects list: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch projects list: {str(e)}"
+        )
+
+
+@router.get("/{project_id}/artifacts", response_model=ProjectArtifactsResponse)
+async def get_project_artifacts(project_id: str):
+    """
+    Get complete artifact hierarchy for a project from DynamoDB.
+    
+    Args:
+        project_id: Project identifier
+        
+    Returns:
+        Complete project hierarchy with epics, features, use cases, and test cases
+    """
+    try:
+        logger.info(f"Fetching artifacts for project: {project_id}")
+        
+        # Initialize DynamoDB client
+        dynamodb = boto3.client(
+            'dynamodb',
+            region_name=config.AWS_REGION
+        )
+        
+        table_name = config.DYNAMODB_TABLE_NAME
+        
+        # Query all items for this project
+        response = dynamodb.query(
+            TableName=table_name,
+            KeyConditionExpression='PK = :pk',
+            ExpressionAttributeValues={
+                ':pk': {'S': f'PROJECT#{project_id}'}
+            }
+        )
+        
+        items = response.get('Items', [])
+        
+        # Handle pagination
+        while 'LastEvaluatedKey' in response:
+            response = dynamodb.query(
+                TableName=table_name,
+                KeyConditionExpression='PK = :pk',
+                ExpressionAttributeValues={
+                    ':pk': {'S': f'PROJECT#{project_id}'}
+                },
+                ExclusiveStartKey=response['LastEvaluatedKey']
+            )
+            items.extend(response.get('Items', []))
+        
+        if not items:
+            logger.warning(f"No artifacts found for project {project_id}")
+            return {
+                "success": False,
+                "project_id": project_id,
+                "error": f"No artifacts found for project {project_id}"
+            }
+        
+        # Parse items and organize by type
+        metadata = None
+        epics_map = {}
+        features_map = {}
+        use_cases_map = {}
+        test_cases_map = {}
+        
+        for item in items:
+            sk = item['SK']['S']
+            
+            if sk == 'METADATA':
+                # Parse metadata
+                metadata = _parse_dynamodb_item(item)
+                
+            elif sk.startswith('EPIC#') and '#FEATURE#' not in sk:
+                # Epic item
+                epic = _parse_dynamodb_item(item)
+                epic['features'] = []
+                epics_map[epic.get('epic_id', '')] = epic
+                
+            elif '#FEATURE#' in sk and '#UC#' not in sk:
+                # Feature item
+                feature = _parse_dynamodb_item(item)
+                feature['use_cases'] = []
+                epic_id = feature.get('epic_id', '')
+                features_map[feature.get('feature_id', '')] = {
+                    'data': feature,
+                    'epic_id': epic_id
+                }
+                
+            elif '#UC#' in sk and '#TC#' not in sk:
+                # Use case item
+                use_case = _parse_dynamodb_item(item)
+                use_case['test_cases'] = []
+                feature_id = use_case.get('feature_id', '')
+                use_cases_map[use_case.get('use_case_id', '')] = {
+                    'data': use_case,
+                    'feature_id': feature_id
+                }
+                
+            elif '#TC#' in sk:
+                # Test case item
+                test_case = _parse_dynamodb_item(item)
+                use_case_id = test_case.get('use_case_id', '')
+                if use_case_id not in test_cases_map:
+                    test_cases_map[use_case_id] = []
+                test_cases_map[use_case_id].append(test_case)
+        
+        # Reconstruct hierarchy: test cases → use cases → features → epics
+        for use_case_id, test_cases_list in test_cases_map.items():
+            if use_case_id in use_cases_map:
+                use_cases_map[use_case_id]['data']['test_cases'] = test_cases_list
+        
+        for use_case_id, use_case_info in use_cases_map.items():
+            feature_id = use_case_info['feature_id']
+            if feature_id in features_map:
+                features_map[feature_id]['data']['use_cases'].append(use_case_info['data'])
+        
+        for feature_id, feature_info in features_map.items():
+            epic_id = feature_info['epic_id']
+            if epic_id in epics_map:
+                epics_map[epic_id]['features'].append(feature_info['data'])
+        
+        # Convert epics_map to list
+        epics_list = list(epics_map.values())
+        
+        # Build response
+        response_data = {
+            "success": True,
+            "project_id": project_id,
+            "project_name": metadata.get('project_name', '') if metadata else '',
+            "metadata": metadata,
+            "hierarchy": {
+                "epics": epics_list
+            }
+        }
+        
+        logger.info(f"Successfully retrieved {len(epics_list)} epics for project {project_id}")
+        
+        return response_data
+        
+    except ClientError as e:
+        error_msg = f"DynamoDB error fetching project artifacts: {str(e)}"
+        logger.error(error_msg)
+        return {
+            "success": False,
+            "project_id": project_id,
+            "error": error_msg
+        }
+    except Exception as e:
+        error_msg = f"Error fetching project artifacts: {str(e)}"
+        logger.error(error_msg)
+        return {
+            "success": False,
+            "project_id": project_id,
+            "error": error_msg
+        }
+
+
+def _parse_dynamodb_item(item: dict) -> dict:
+    """
+    Parse a DynamoDB item to a regular dictionary.
+    Handles all DynamoDB data types (S, N, M, L, etc.)
+    """
+    result = {}
+    for key, value in item.items():
+        if 'S' in value:
+            result[key] = value['S']
+        elif 'N' in value:
+            result[key] = int(value['N']) if '.' not in value['N'] else float(value['N'])
+        elif 'M' in value:
+            result[key] = _parse_dynamodb_item(value['M'])
+        elif 'L' in value:
+            result[key] = [_parse_dynamodb_value(v) for v in value['L']]
+        elif 'BOOL' in value:
+            result[key] = value['BOOL']
+        elif 'NULL' in value:
+            result[key] = None
+    return result
+
+
+def _parse_dynamodb_value(value: dict) -> any:
+    """Parse a single DynamoDB value"""
+    if 'S' in value:
+        return value['S']
+    elif 'N' in value:
+        return int(value['N']) if '.' not in value['N'] else float(value['N'])
+    elif 'M' in value:
+        return _parse_dynamodb_item(value['M'])
+    elif 'L' in value:
+        return [_parse_dynamodb_value(v) for v in value['L']]
+    elif 'BOOL' in value:
+        return value['BOOL']
+    elif 'NULL' in value:
+        return None
+    return None
 
 
 @router.get("", response_model=ProjectListResponse)

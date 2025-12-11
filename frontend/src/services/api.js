@@ -84,6 +84,10 @@ const api = {
   // Project Management APIs
   generateProjectId: (data) => apiInstance.post('/api/generate-project-id', data),
   
+  // DynamoDB Project APIs
+  getProjectsList: () => apiInstance.get('/api/projects/list'),
+  getProjectArtifacts: (projectId) => apiInstance.get(`/api/projects/${projectId}/artifacts`),
+  
   // Generic API call method
   call: (method, endpoint, data = null, config = {}) => {
     return apiInstance[method.toLowerCase()](endpoint, data, config);

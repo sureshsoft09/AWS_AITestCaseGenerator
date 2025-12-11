@@ -33,6 +33,9 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  Select,
+  FormControl,
+  InputLabel,
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -78,6 +81,8 @@ const JiraIcon = ({ sx = {} }) => (
 
 const Dashboard = () => {
   const [projects, setProjects] = useState([]);
+  const [projectsList, setProjectsList] = useState([]); // List of available projects for dropdown
+  const [selectedProject, setSelectedProject] = useState(''); // Selected project ID
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState({});
@@ -109,30 +114,15 @@ const Dashboard = () => {
   const loadProjects = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/api/projects');
+      // Load list of projects for dropdown
+      const response = await api.getProjectsList();
       const projectsData = response.data.projects || [];
+      setProjectsList(projectsData);
       
-      // Load detailed hierarchy for each project
-      const projectsWithHierarchy = await Promise.all(
-        projectsData.map(async (project) => {
-          try {
-            const hierarchyResponse = await api.get(`/api/projects/${project.project_id}/hierarchy`);
-            return {
-              ...project,
-              hierarchy: hierarchyResponse.data.hierarchy || {}
-            };
-          } catch (error) {
-            console.error(`Error loading hierarchy for project ${project.project_id}:`, error);
-            return {
-              ...project,
-              hierarchy: {}
-            };
-          }
-        })
-      );
-      
-      setProjects(projectsWithHierarchy);
-      calculateStatistics(projectsWithHierarchy);
+      // If there's at least one project and none is selected, select the first one
+      if (projectsData.length > 0 && !selectedProject) {
+        setSelectedProject(projectsData[0].project_id);
+      }
       
     } catch (error) {
       console.error('Error loading projects:', error);
@@ -141,6 +131,38 @@ const Dashboard = () => {
       setLoading(false);
     }
   };
+
+  const loadProjectArtifacts = async (projectId) => {
+    if (!projectId) return;
+    
+    try {
+      setLoading(true);
+      // Load project artifacts from DynamoDB via backend
+      const response = await api.getProjectArtifacts(projectId);
+      const projectData = response.data;
+      
+      if (projectData.success) {
+        // Set the project with its hierarchy
+        setProjects([projectData]);
+        calculateStatistics([projectData]);
+      } else {
+        showNotification('Failed to load project artifacts', 'error');
+      }
+      
+    } catch (error) {
+      console.error('Error loading project artifacts:', error);
+      showNotification('Failed to load project artifacts', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load artifacts when selected project changes
+  useEffect(() => {
+    if (selectedProject) {
+      loadProjectArtifacts(selectedProject);
+    }
+  }, [selectedProject]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -913,20 +935,7 @@ const Dashboard = () => {
         <Typography variant="h4" sx={{ fontWeight: 700, color: '#667eea' }}>
           Project Dashboard
         </Typography>
-        <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-          <Button
-            variant="contained"
-            startIcon={<LaunchIcon />}
-            onClick={() => window.open('https://vibetesting-app-145534422719.europe-west1.run.app/', '_blank')}
-            sx={{ 
-              backgroundColor: '#667eea',
-              '&:hover': {
-                backgroundColor: '#5a67d8'
-              }
-            }}
-          >
-            Vibe Testing
-          </Button>
+        <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}> 
           <Button
             variant="outlined"
             startIcon={refreshing ? <CircularProgress size={16} /> : <RefreshIcon />}
@@ -937,6 +946,37 @@ const Dashboard = () => {
           </Button>
         </Box>
       </Box>
+
+      {/* Statistics Cards */}
+      <Grid container spacing={3} sx={{ mb: 4 }}>
+        {/* Project Selector */}
+        <Grid item xs={12}>
+          <Paper sx={{ p: 3, mb: 2 }}>
+            <FormControl fullWidth>
+              <InputLabel id="project-selector-label">Select Project</InputLabel>
+              <Select
+                labelId="project-selector-label"
+                id="project-selector"
+                value={selectedProject}
+                label="Select Project"
+                onChange={(e) => setSelectedProject(e.target.value)}
+                disabled={loading || projectsList.length === 0}
+              >
+                {projectsList.map((project) => (
+                  <MenuItem key={project.project_id} value={project.project_id}>
+                    {project.project_name} ({project.project_id})
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            {projectsList.length === 0 && !loading && (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                No projects available. Please create a project first.
+              </Typography>
+            )}
+          </Paper>
+        </Grid>
+      </Grid>
 
       {/* Statistics Cards */}
       <Grid container spacing={3} sx={{ mb: 4 }}>
