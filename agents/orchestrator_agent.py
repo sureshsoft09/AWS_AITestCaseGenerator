@@ -31,6 +31,7 @@ from agents.reviewer_agent import reviewer_agenttool
 from agents.test_generator_agent import testgenerator_agenttool
 from agents.enhance_agent import enhance_agenttool
 from agents.migrate_agent import migrate_agenttool
+from agents.dynamodb_tools import store_test_artifacts_tool, get_project_artifacts_tool
 
 
 # Pydantic Models for API
@@ -89,6 +90,17 @@ After generating test artifacts, AUTOMATICALLY push them to Jira using the Jira 
   * summary: Use artifact title/name
   * description: Use detailed artifact content
   * fields: Optional additional fields
+- Collect and store returned Jira issue IDs/keys and URLs for traceability
+
+**DynamoDB Storage:**
+After pushing artifacts to Jira, AUTOMATICALLY store all test artifacts in DynamoDB:
+- Use store_test_artifacts_tool to save epics, features, use cases, and test cases
+- Include project_id, project_name, session_id, and the complete epics structure with Jira IDs, Url,Keys
+- The epics should follow this hierarchical structure:
+  * Epic → Features → Use Cases → Test Cases
+  * Each level includes: IDs, names, descriptions, priorities, Jira info, compliance mappings
+- After successful storage, report the artifact counts (epics, features, use_cases, test_cases)
+
 
 When you receive a request:
 - Retrieve relevant session memories to understand context
@@ -361,7 +373,15 @@ def create_streamable_http_transport():
 streamable_http_jira_mcp_client = MCPClient(create_streamable_http_transport)
 
 # Create orchestrator agent with all tools - MCP tools will be loaded within context
-tools_list = [reviewer_agenttool, testgenerator_agenttool, enhance_agenttool, migrate_agenttool, mem0_memory]
+tools_list = [
+    reviewer_agenttool,
+    testgenerator_agenttool,
+    enhance_agenttool,
+    migrate_agenttool,
+    mem0_memory,
+    store_test_artifacts_tool,
+    get_project_artifacts_tool
+]
 
 # Add MCP client directly to tools list - it will manage its own context
 tools_list.append(streamable_http_jira_mcp_client)
