@@ -81,9 +81,6 @@ const api = {
   // Analytics APIs
   getAnalyticsSummary: () => apiInstance.get('/analytics_summary'),
   
-  // Agent Session APIs
-  resetAgentSession: () => apiInstance.post('/reset_agentsession'),
-  
   // Project Management APIs
   generateProjectId: (data) => apiInstance.post('/api/generate-project-id', data),
   

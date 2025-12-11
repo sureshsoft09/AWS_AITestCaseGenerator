@@ -49,6 +49,8 @@ class ExecuteRequest(BaseModel):
     session_id: str
     project_id: str
     approved: bool = True
+    jira_project_key: Optional[str] = None
+    notification_email: Optional[EmailStr] = None
 
 
 class ExecuteResponse(BaseModel):
@@ -156,6 +158,7 @@ async def review_requirements(request: ReviewRequest):
             Jira Project Key - {request.jira_project_key}
             Notification Email - {request.notification_email}
 
+            Only return back below json format with no additional text in the response.
             ### OUTPUT FORMAT (INTERACTIVE RESPONSE)
             {{
                 "readiness_plan": {{
@@ -227,7 +230,7 @@ async def review_requirements(request: ReviewRequest):
             "session_id": session_id,
             "project_id": request.project_id,
             "status": "review_completed" if review_result.get("success") else "review_failed",
-            "message": agent_response_text,
+            "message": agent_response_text,  # Changed from 'response' to 'message'
             "analysis": review_result.get("metadata", {})
         }
         
@@ -286,7 +289,54 @@ async def chat_with_agent(request: ChatRequest):
         # Send to agents service via HTTP
         result = await agent_client.process_request(
             session_id=request.session_id,
-            user_query=request.user_message,
+            user_query=f"""
+            This is a clarification continuation request from the user for requirement review.
+            The user has provided additional information or confirmation regarding previously
+            identified ambiguous or missing requirements. It should be forwarded to the requirement_reviewer_agent not to any other tools. 
+
+            Context:
+            - Type: Clarification Interaction
+            - Intent: Resolve pending ambiguities, provide clarification, or confirm requirements as complete.
+            - User message: 
+            {request.user_message}
+            Please respond only with the agent's response json format without any additional formatting or explanation.
+            
+            ### OUTPUT FORMAT (INTERACTIVE RESPONSE)
+            {{
+                "readiness_plan": {{
+                    "estimated_epics": 0,
+                    "estimated_features": 0,
+                    "estimated_use_cases": 0,
+                    "estimated_test_cases": 0,
+                    "overall_status": "Clarifications Needed"
+                }},
+                "status": "review_in_progress",
+                "next_action": "await_user_clarifications",
+                "assistant_response": [
+                    "Requirement REQ-12 is vague. Please specify acceptable response time (e.g., in seconds).",
+                    "Requirement REQ-27 mentions compliance but does not specify which standard — please confirm if FDA or IEC 62304 applies."
+                ],
+                "test_generation_status": {{}},
+                "next_action": "Awaiting user clarifications or confirmation for pending items."
+            }}
+
+            ### Ready for Test Generation
+            {{
+            "agents_tools_invoked": ["reviewer_agent"],
+            "action_summary": "Requirements validated.",
+            "status": "ready_for_generation",
+            "next_action": "trigger_test_generation",
+            "readiness_plan": {{
+                    "estimated_epics": 0,
+                    "estimated_features": 0,
+                    "estimated_use_cases": 0,
+                    "estimated_test_cases": 0,
+                    "overall_status": "Ready for Test Generation"
+            }},
+            "test_generation_status": {{}}
+            }}
+
+            """,
             load_session_context=True
         )
         
@@ -394,7 +444,38 @@ async def execute_generation(request: ExecuteRequest):
         # Trigger Test Generator Agent via HTTP
         generation_result = await agent_client.process_request(
             session_id=request.session_id,
-            user_query=f"Generate test artifacts from these requirements:\n\n{requirements_text}",
+            user_query=f"""
+            Generate complete test cases using the previously validated and approved requirement details available in memory. 
+            Follow the standard MedAssureAI process and use the connected sub-agents (test_generator_agent) 
+            to generate test cases in a structured format.
+
+            Once the test artifacts are generated, create Jira issues for each items (epics to test cases) using the MCP Server Jira integration.
+
+            Project ID - {request.project_id}
+            Jira Project Key - {request.jira_project_key}
+            Notification Email - {request.notification_email}
+
+            Please respond only with the agent's response json format without any additional formatting or explanation.
+            
+            ### OUTPUT FORMAT
+            {{
+                "agents_tools_invoked": ["Orchestrator Agent", "jira_mcp_tool", "DynamoDB_tools"],
+                "action_summary": "All artifacts stored successfully.",
+                "status": "mcp_push_complete",
+                "next_action": "present_summary",
+                "test_generation_status": {{
+                    "status": "completed",  // or "generation_completed"
+                    "epics_created": 5,
+                    "features_created": 12,
+                    "use_cases_created": 25,
+                    "test_cases_created": 150,
+                    "approved_items": 120,
+                    "clarifications_needed": 30,
+                    "stored_in_DynamoDB": true,
+                    "pushed_to_jira": true
+                }}
+            }}
+            """,
             load_session_context=True
         )
         
@@ -418,8 +499,36 @@ async def execute_generation(request: ExecuteRequest):
         if notification_email and generation_result.get("success"):
             from backend.services.notification_service import notification_service
             
-            # Get artifact counts
-            artifact_counts = _get_artifact_counts(request.project_id)
+            # Extract artifact counts from agent response
+            artifact_counts = {}
+            data = generation_result.get("data", {})
+            if isinstance(data, dict):
+                content = data.get("content", [])
+                if isinstance(content, list) and len(content) > 0:
+                    first_content = content[0]
+                    if isinstance(first_content, dict):
+                        content_text = first_content.get("text", "")
+                        # Try to parse JSON from content.text
+                        try:
+                            import json
+                            parsed_content = json.loads(content_text)
+                            test_gen_status = parsed_content.get("test_generation_status", {})
+                            if test_gen_status:
+                                artifact_counts = {
+                                    "epics": test_gen_status.get("epics_created", 0),
+                                    "features": test_gen_status.get("features_created", 0),
+                                    "use_cases": test_gen_status.get("use_cases_created", 0),
+                                    "test_cases": test_gen_status.get("test_cases_created", 0),
+                                    "total": sum([
+                                        test_gen_status.get("epics_created", 0),
+                                        test_gen_status.get("features_created", 0),
+                                        test_gen_status.get("use_cases_created", 0),
+                                        test_gen_status.get("test_cases_created", 0)
+                                    ])
+                                }
+                        except:
+                            # Fallback to default counts if parsing fails
+                            artifact_counts = _get_artifact_counts(request.project_id)
             
             # Send notification (non-blocking - errors are logged but don't fail the request)
             notification_service.send_completion_notification(
@@ -435,11 +544,21 @@ async def execute_generation(request: ExecuteRequest):
             extra={"session_id": request.session_id, "success": generation_result.get("success")}
         )
         
+        # Extract content.text for response message
+        response_message = "Generation completed"
+        data = generation_result.get("data", {})
+        if isinstance(data, dict):
+            content = data.get("content", [])
+            if isinstance(content, list) and len(content) > 0:
+                first_content = content[0]
+                if isinstance(first_content, dict):
+                    response_message = first_content.get("text", "Generation completed")
+        
         return {
             "session_id": request.session_id,
             "project_id": request.project_id,
             "status": "generation_completed" if generation_result.get("success") else "generation_failed",
-            "message": generation_result.get("answer", "Generation completed"),
+            "message": response_message,
             "generation_started": True
         }
         

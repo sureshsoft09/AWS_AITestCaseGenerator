@@ -62,15 +62,6 @@ const TopNavBar = () => {
 
     // Navigate immediately
     navigate(path);
-    
-    // Reset agent session in background
-    api.resetAgentSession()
-      .then(() => {
-        console.log('Agent session reset successfully');
-      })
-      .catch((error) => {
-        console.error('Failed to reset agent session:', error);
-      });
   };
 
   const isActivePath = (path) => {

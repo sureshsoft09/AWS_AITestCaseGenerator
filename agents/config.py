@@ -19,7 +19,7 @@ class AgentConfig:
     
     # OpenSearch Configuration
     OPENSEARCH_ENDPOINT = os.getenv('OPENSEARCH_ENDPOINT', '')
-    OPENSEARCH_INDEX = os.getenv('OPENSEARCH_INDEX', 'medassure_sessions')
+    OPENSEARCH_INDEX = os.getenv('OPENSEARCH_INDEX', 'medassure-agents-memory')
     
     # Service Configuration
     SERVICE_NAME = 'medassure-agents'

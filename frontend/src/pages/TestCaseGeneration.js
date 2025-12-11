@@ -1,6 +1,7 @@
 /* eslint-disable no-unused-vars */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { v4 as uuidv4 } from 'uuid';
 import api from '../services/api';
 import {
   Box,
@@ -86,6 +87,8 @@ const TestCaseGeneration = () => {
   const { showNotification } = useNotification();
 
   // State management
+  const [sessionId, setSessionId] = useState(null);
+  const [uploadId, setUploadId] = useState(null);
   const [activeStep, setActiveStep] = useState(0);
   const [projectData, setProjectData] = useState({
     name: '',
@@ -130,6 +133,13 @@ const TestCaseGeneration = () => {
   const [newProjectDialog, setNewProjectDialog] = useState(false);
   const [exportDialog, setExportDialog] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
+
+  // Generate session ID on component mount
+  useEffect(() => {
+    const newSessionId = uuidv4();
+    setSessionId(newSessionId);
+    console.log(`Generated session ID: ${newSessionId}`);
+  }, []);
 
   // Auto-scroll to bottom when chat messages change
   useEffect(() => {
@@ -213,29 +223,24 @@ const TestCaseGeneration = () => {
     try {
       setCreatingProject(true);
       
-      // Call backend API to generate unique project ID
-      const response = await api.generateProjectId({
-        project_name: projectData.name,
-        description: projectData.description,
-        jira_project_key: projectData.jiraProjectKey,
-        notification_email: projectData.notificationEmail
-      });
-      
-      const { project_id } = response.data;
+      // Project will be created in backend during file upload step
+      // No API call here - just validate and store the data
+      // Generate a temporary client-side project ID
+      const tempProjectId = `${projectData.name.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}`;
       
       setProjectData({
         ...projectData,
         created: new Date(),
-        id: project_id
+        id: tempProjectId
       });
       setNewProjectDialog(false);
       setActiveStep(1);
-      showNotification(`Project created successfully with ID: ${project_id}`, 'success');
+      showNotification(`Project "${projectData.name}" validated successfully. Please upload requirement files.`, 'success');
       
     } catch (error) {
-      console.error('Error creating project:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error occurred';
-      showNotification(`Failed to create project: ${errorMessage}`, 'error');
+      console.error('Error validating project:', error);
+      const errorMessage = error.message || 'Unknown error occurred';
+      showNotification(`Failed to validate project: ${errorMessage}`, 'error');
     } finally {
       setCreatingProject(false);
     }
@@ -272,12 +277,19 @@ const TestCaseGeneration = () => {
       return;
     }
 
+    if (!sessionId) {
+      showNotification('Session not initialized. Please refresh the page.', 'error');
+      return;
+    }
+
     setIsUploading(true);
     
     try {
       const formData = new FormData();
       formData.append('project_name', projectData.name);
-      formData.append('project_id', projectData.id);
+      formData.append('session_id', sessionId);
+      formData.append('jira_project_key', projectData.jiraProjectKey);
+      formData.append('notification_email', projectData.notificationEmail);
       
       selectedFiles.forEach((file) => {
         formData.append('files', file);
@@ -285,27 +297,50 @@ const TestCaseGeneration = () => {
 
       const response = await api.uploadRequirementFile(formData);
       
-      if (response.data.success) {
-        const processedFiles = response.data.files_processed.map(file => ({
+      console.log('Upload response:', response.data);
+      
+      // Handle new response structure
+      if (response.data.upload_id && response.data.project_id) {
+        // Store upload_id for later use
+        setUploadId(response.data.upload_id);
+        
+        // Update project data with backend-generated project_id
+        setProjectData(prev => ({
+          ...prev,
+          id: response.data.project_id
+        }));
+        
+        // Process uploaded files
+        const processedFiles = response.data.files.map(file => ({
           id: Date.now() + Math.random(),
           name: file.filename,
-          size: file.size,
-          type: file.type,
+          size: file.file_size,
+          type: file.content_type,
           uploaded: new Date(),
           status: 'uploaded',
-          cloudPath: file.cloud_path,
-          textLength: file.text_length
+          cloudPath: file.s3_key,
+          fileId: file.file_id
         }));
         
         setUploadedFiles(processedFiles);
-        setExtractedContent(response.data.extracted_content);
         setUploadCompleted(true);
         setIsUploading(false);
         
-        showNotification(
-          `Successfully uploaded and processed ${processedFiles.length} file(s)!`, 
-          'success'
-        );
+        // Show notification based on upload status
+        const uploadStatus = response.data.upload_status;
+        if (uploadStatus === 'completed') {
+          showNotification(
+            `Successfully uploaded and processed ${processedFiles.length} file(s)!`, 
+            'success'
+          );
+        } else if (uploadStatus === 'partial') {
+          const errors = response.data.errors || [];
+          showNotification(
+            `Partially uploaded: ${processedFiles.length} succeeded, ${errors.length} failed.`, 
+            'warning'
+          );
+        }        
+  
       } else {
         throw new Error('Upload failed');
       }
@@ -313,7 +348,7 @@ const TestCaseGeneration = () => {
       console.error('Upload error:', error);
       setIsUploading(false);
       showNotification(
-        error.response?.data?.detail || 'Failed to upload files. Please try again.',
+        getErrorMessage(error, 'Failed to upload files. Please try again.'),
         'error'
       );
     }
@@ -325,6 +360,30 @@ const TestCaseGeneration = () => {
   };
 
   // Note: Clarification chat is handled in handleSendMessage below (calls backend)
+
+  // Helper function to safely extract error message from API response
+  const getErrorMessage = (error, defaultMessage = 'An error occurred') => {
+    if (!error) return defaultMessage;
+    
+    // Check if detail is a string
+    if (error.response?.data?.detail) {
+      const detail = error.response.data.detail;
+      if (typeof detail === 'string') {
+        return detail;
+      }
+      // If detail is an array (FastAPI validation errors)
+      if (Array.isArray(detail)) {
+        return detail.map(err => err.msg || JSON.stringify(err)).join(', ');
+      }
+      // If detail is an object
+      if (typeof detail === 'object') {
+        return detail.msg || detail.message || JSON.stringify(detail);
+      }
+    }
+    
+    // Fallback to error message or default
+    return error.message || defaultMessage;
+  };
 
   // Helper function to parse AI response and extract structured data
   const parseAIResponse = (aiResponse) => {
@@ -395,41 +454,76 @@ const TestCaseGeneration = () => {
       return;
     }
 
+    if (!sessionId) {
+      showNotification('Session not initialized. Please refresh the page.', 'error');
+      return;
+    }
+
+    if (!uploadId) {
+      showNotification('Upload information missing. Please upload files again.', 'error');
+      return;
+    }
+
     setIsProcessing(true);
     
     try {
       const response = await api.reviewRequirementSpecifications({
+        session_id: sessionId,
+        upload_id: uploadId,
         project_id: projectData.id,
-        project_name: projectData.name
+        project_name: projectData.name,
+        jira_project_key: projectData.jiraProjectKey,
+        notification_email: projectData.notificationEmail
       });
 
       console.log('Review response:', response);
 
-      // Parse the JSON response string from the backend
-      const responseString = response.data.response;
-      if (!responseString) throw new Error('No response from analysis service');
-
-      // Extract JSON from the response string (it's wrapped in ```json```)
+      // The response structure is: { session_id, project_id, status, message, analysis }
+      // The actual JSON data is in response.data.message as a string
       let data;
-      try {
-        const jsonMatch = responseString.match(/```json\n([\s\S]*?)\n```/);
-        if (jsonMatch) {
-          data = JSON.parse(jsonMatch[1]);
-        } else {
-          // Try parsing the whole response as JSON
-          data = JSON.parse(responseString);
+      const apiResponse = response.data;
+      
+      // Check if we have the message field
+      if (!apiResponse.message) {
+        throw new Error('No response from analysis service');
+      }
+      
+      // Parse the message string which contains the JSON structure
+      const responseString = apiResponse.message;
+      
+      if (typeof responseString === 'string') {
+        // Response is a string - try to parse JSON
+        try {
+          // Check if wrapped in ```json``` markdown
+          const jsonMatch = responseString.match(/```json\n([\s\S]*?)\n```/);
+          if (jsonMatch) {
+            data = JSON.parse(jsonMatch[1]);
+          } else {
+            // Try parsing the whole string as JSON
+            data = JSON.parse(responseString);
+          }
+        } catch (parseError) {
+          console.error('Failed to parse JSON response:', parseError);
+          throw new Error('Invalid response format from analysis service');
         }
-      } catch (parseError) {
-        console.error('Failed to parse JSON response:', parseError);
+      } else if (typeof responseString === 'object' && responseString !== null) {
+        // Response is already a parsed object
+        data = responseString;
+      } else {
         throw new Error('Invalid response format from analysis service');
       }
+
+      console.log('Parsed review data:', data);
 
       // Store raw metadata for control logic
       setReadinessMeta(data);
 
-      // Build a human readable AI analysis text from assistant_response if present
-      const assistantLines = Array.isArray(data.assistant_response) ? data.assistant_response : (data.assistant_response ? [data.assistant_response] : []);
-      const aiAnalysisText = assistantLines.join('\n') || data.ai_text || '';
+      // Build chat messages from assistant_response array
+      const assistantLines = Array.isArray(data.assistant_response) 
+        ? data.assistant_response 
+        : (data.assistant_response ? [data.assistant_response] : []);
+      
+      const aiAnalysisText = assistantLines.join('\n\n') || '';
 
       // Keep existing parsed readinessPlan for existing UI widgets
       const parsedData = aiAnalysisText ? parseAIResponse(aiAnalysisText) : parseAIResponse(data.readiness_plan ? JSON.stringify(data.readiness_plan) : '');
@@ -438,19 +532,42 @@ const TestCaseGeneration = () => {
         aiAnalysis: aiAnalysisText,
         // keep a reference to backend readiness summary
         backendReadiness: data.readiness_plan || null,
-        test_generation_status: data.test_generation_status || {}
+        test_generation_status: data.test_generation_status || {},
+        // Store estimated counts for display
+        estimatedCounts: {
+          epics: data.readiness_plan?.estimated_epics || 0,
+          features: data.readiness_plan?.estimated_features || 0,
+          useCases: data.readiness_plan?.estimated_use_cases || 0,
+          testCases: data.readiness_plan?.estimated_test_cases || 0
+        }
       };
 
       setReadinessPlan(mergedPlan);
       setIsProcessing(false);
       
-      // Initialize chat messages depending on overall status
-      const overall = data.readiness_plan?.overall_status || null;
+      // Check status and overall_status to determine next step
+      const status = data.status || '';
+      const overall = data.readiness_plan?.overall_status || '';
+      const nextAction = data.next_action || '';
       const testGenStatus = data.test_generation_status?.ready_for_generation || false;
 
-      console.log('Review documents - checking readiness:', { overall, testGenStatus, data });
+      console.log('Review documents - checking readiness:', { 
+        status, 
+        overall, 
+        nextAction,
+        testGenStatus, 
+        data 
+      });
 
-      if ((overall && (overall.toLowerCase().includes('ready for test generation') || overall.toLowerCase().includes('ready'))) || testGenStatus) {
+      // Determine if ready for test generation
+      const isReady = (
+        overall.toLowerCase().includes('ready for test generation') || 
+        overall.toLowerCase() === 'ready' ||
+        status === 'ready_for_generation' ||
+        testGenStatus
+      );
+
+      if (isReady) {
         // Ready for test generation: disable assistant, enable generate, advance to step 3
         setAssistantEnabled(false);
         setActiveStep(3);
@@ -469,26 +586,36 @@ const TestCaseGeneration = () => {
         // Not ready: enable assistant, stay on step 2 (Review & Chat)
         setAssistantEnabled(true);
         setActiveStep(2);
-        showNotification('Clarifications needed - please use the chat to provide additional information.', 'warning');
         
-        const initialMessages = assistantLines.length > 0 ? assistantLines.map((m, i) => ({ 
-          id: Date.now() + i + 1, 
-          text: m, 
-          sender: 'ai', 
-          timestamp: new Date() 
-        })) : [{ 
-          id: Date.now(), 
-          text: 'The analysis indicates clarifications are needed. Please provide the requested information.', 
-          sender: 'ai', 
-          timestamp: new Date() 
-        }];
+        // Determine notification message based on status
+        let notificationMessage = 'Clarifications needed - please use the chat to provide additional information.';
+        if (status === 'review_in_progress' || nextAction === 'await_user_clarifications') {
+          notificationMessage = 'Review in progress - please provide clarifications as requested.';
+        }
+        
+        showNotification(notificationMessage, 'warning');
+        
+        // Create chat messages from assistant_response array
+        const initialMessages = assistantLines.length > 0 
+          ? assistantLines.map((m, i) => ({ 
+              id: Date.now() + i + 1, 
+              text: m, 
+              sender: 'ai', 
+              timestamp: new Date() 
+            })) 
+          : [{ 
+              id: Date.now(), 
+              text: 'The analysis indicates clarifications are needed. Please provide the requested information.', 
+              sender: 'ai', 
+              timestamp: new Date() 
+            }];
         setChatMessages(initialMessages);
       }
     } catch (error) {
       console.error('Review error:', error);
       setIsProcessing(false);
       showNotification(
-        error.response?.data?.detail || 'Failed to analyze documents. Please try again.',
+        getErrorMessage(error, 'Failed to analyze documents. Please try again.'),
         'error'
       );
     }
@@ -512,22 +639,19 @@ const TestCaseGeneration = () => {
     setIsChatProcessing(true); // Indicate this is chat processing
 
     try {
-      // Call clarification API on backend - backend expects PromptRequest with just a prompt field
+      // Call chat API - backend expects { session_id, user_message }
       const payload = {
-        prompt: userMessage.text,
-        metadata: {
-          project_id: projectData.id,
-          project_name: projectData.name,
-          type: 'clarification',
-          conversation_length: chatMessages.length
-        }
+        session_id: sessionId,
+        user_message: userMessage.text
       };
 
       const resp = await api.requirementClarificationChat(payload);
-      console.log(resp.data.response)
+      console.log('Chat response:', resp.data);
       
-      // Parse the JSON response string from the backend (similar to review response)
-      const responseString = resp.data.response || resp.data;
+      // Parse the agent_response from the backend
+      // Response structure: { session_id, agent_response, status }
+      // agent_response contains JSON string with one of two formats
+      const responseString = resp.data.agent_response || resp.data;
       let respData;
       
       if (typeof responseString === 'string') {
@@ -540,13 +664,13 @@ const TestCaseGeneration = () => {
           }
         } catch (parseError) {
           console.error('Failed to parse clarification response:', parseError);
-          respData = { assistant_response: responseString };
+          respData = { assistant_response: [responseString] };
         }
       } else {
         respData = responseString;
       }
 
-      // Backend should return assistant reply and possibly updated readiness_plan
+      // Extract assistant reply from the response
       let assistantReply;
       if (respData?.assistant_response) {
         if (Array.isArray(respData.assistant_response)) {
@@ -556,8 +680,9 @@ const TestCaseGeneration = () => {
         } else {
           assistantReply = 'Thank you for the clarification.';
         }
-      } else if (respData?.response && typeof respData.response === 'string') {
-        assistantReply = respData.response;
+      } else if (respData?.action_summary && typeof respData.action_summary === 'string') {
+        // For ready_for_generation status
+        assistantReply = respData.action_summary;
       } else {
         assistantReply = 'Thank you for the clarification.';
       }
@@ -643,19 +768,11 @@ const TestCaseGeneration = () => {
     
     try {
       const payload = {
-        prompt: `Approved to generate test cases. FIRESTORE_PROJECT_ID : ${projectData.id}, Project Name: ${projectData.name}, JIRA_PROJECT_KEY : ${projectData.jiraProjectKey}. Estimated counts - Epics: ${readinessMeta?.readiness_plan?.estimated_epics || 0}, Features: ${readinessMeta?.readiness_plan?.estimated_features || 0}, Use Cases: ${readinessMeta?.readiness_plan?.estimated_use_cases || 0}, Test Cases: ${readinessMeta?.readiness_plan?.estimated_test_cases || 0}`,
-        metadata: {
-          project_id: projectData.id,
-          project_name: projectData.name,
-          type: 'test_generation',
-          readiness_status: readinessMeta?.readiness_plan?.overall_status || 'Ready for Test Generation',
-          estimated_counts: {
-            epics: readinessMeta?.readiness_plan?.estimated_epics || 0,
-            features: readinessMeta?.readiness_plan?.estimated_features || 0,
-            use_cases: readinessMeta?.readiness_plan?.estimated_use_cases || 0,
-            test_cases: readinessMeta?.readiness_plan?.estimated_test_cases || 0
-          }
-        }
+        session_id: sessionId,
+        project_id: projectData.id,
+        jira_project_key: projectData.jiraProjectKey,
+        notification_email: projectData.notificationEmail,
+        approved: true
       };
 
       console.log('Generating test cases with payload:', payload);
@@ -663,29 +780,37 @@ const TestCaseGeneration = () => {
       
       console.log('Test case generation response:', response);
 
-      // Parse the response - handle the new agent response structure
-      const responseString = response.data.response || response.data;
+      // Parse the response - the JSON structure is in response.data.message
+      const responseData = response.data;
       let testCaseData;
       
-      if (typeof responseString === 'string') {
+      // Extract the message field which contains the JSON structure
+      const messageString = responseData.message || responseData.response || responseData;
+      
+      if (typeof messageString === 'string') {
         try {
-          const jsonMatch = responseString.match(/```json\n([\s\S]*?)\n```/);
+          // Try to extract JSON from markdown code blocks first
+          const jsonMatch = messageString.match(/```json\n([\s\S]*?)\n```/);
           if (jsonMatch) {
             testCaseData = JSON.parse(jsonMatch[1]);
           } else {
-            testCaseData = JSON.parse(responseString);
+            // Parse as plain JSON
+            testCaseData = JSON.parse(messageString);
           }
         } catch (parseError) {
           console.error('Failed to parse test case response:', parseError);
-          // Fallback to mock data if parsing fails
-          testCaseData = { test_generation_status: { status: 'failed' } };
+          // Fallback structure if parsing fails
+          testCaseData = { status: 'failed', test_generation_status: { status: 'failed' } };
         }
+      } else if (typeof messageString === 'object' && messageString !== null) {
+        testCaseData = messageString;
       } else {
-        testCaseData = responseString;
+        testCaseData = { status: 'failed', test_generation_status: { status: 'failed' } };
       }
 
       // Check if test generation was completed successfully
-      if (testCaseData.status === 'generation_completed') {
+      const generationStatus = responseData.status || testCaseData.status;
+      if (generationStatus === 'generation_completed' || testCaseData.status === 'mcp_push_complete') {
         console.log('Test cases generated successfully:', testCaseData);
         
         // Store generation data for popup
@@ -713,7 +838,7 @@ const TestCaseGeneration = () => {
       setIsGenerating(false);
       
       // Show error notification
-      const errorMessage = error.response?.data?.detail || error.message || 'Failed to generate test cases. Please try again.';
+      const errorMessage = getErrorMessage(error, 'Failed to generate test cases. Please try again.');
       showNotification(errorMessage, 'error');
       
       // Don't advance to next step on error - let user try again

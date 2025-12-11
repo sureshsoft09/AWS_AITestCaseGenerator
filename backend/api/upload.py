@@ -175,6 +175,7 @@ async def upload_files(
         "project_name": project_name,
         "jira_project_key": jira_project_key,
         "notification_email": notification_email,
+        "upload_status": "completed" if not errors else "partial",
         "files": uploaded_files
     }
     
