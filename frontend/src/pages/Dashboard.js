@@ -333,9 +333,7 @@ const Dashboard = () => {
         height: '100%',
         background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 250, 255, 0.9) 100%)',
         border: '1px solid rgba(102, 126, 234, 0.1)',
-        transition: 'transform 0.2s ease, box-shadow 0.2s ease',
         '&:hover': {
-          transform: 'translateY(-4px)',
           boxShadow: '0 8px 25px rgba(102, 126, 234, 0.15)',
         },
       }}
@@ -441,11 +439,20 @@ const Dashboard = () => {
                     size="small"
                     variant="outlined"
                     color="primary"
+                    component="a"
+                    href={testCase.jira_issue_url || `https://your-jira-instance.atlassian.net/browse/${testCase.jira_issue_key}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    clickable
                     sx={{ 
                       fontSize: '0.7rem', 
                       height: '20px',
                       borderColor: '#0052CC',
                       color: '#0052CC',
+                      textDecoration: 'none',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 82, 204, 0.08)',
+                      },
                       '& .MuiChip-icon': {
                         marginLeft: '4px',
                         marginRight: '-2px'
@@ -570,11 +577,20 @@ const Dashboard = () => {
                       size="small"
                       variant="outlined"
                       color="primary"
+                      component="a"
+                      href={useCase.jira_issue_url || `https://your-jira-instance.atlassian.net/browse/${useCase.jira_issue_key}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      clickable
                       sx={{ 
                         ml: 1, 
                         fontSize: '0.75rem',
                         borderColor: '#0052CC',
                         color: '#0052CC',
+                        textDecoration: 'none',
+                        '&:hover': {
+                          backgroundColor: 'rgba(0, 82, 204, 0.08)',
+                        },
                         '& .MuiChip-icon': {
                           marginLeft: '4px',
                           marginRight: '-2px'
@@ -664,11 +680,20 @@ const Dashboard = () => {
                       size="small"
                       variant="outlined"
                       color="primary"
+                      component="a"
+                      href={feature.jira_issue_url || `https://your-jira-instance.atlassian.net/browse/${feature.jira_issue_key}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      clickable
                       sx={{ 
                         ml: 1, 
                         fontSize: '0.75rem',
                         borderColor: '#0052CC',
                         color: '#0052CC',
+                        textDecoration: 'none',
+                        '&:hover': {
+                          backgroundColor: 'rgba(0, 82, 204, 0.08)',
+                        },
                         '& .MuiChip-icon': {
                           marginLeft: '4px',
                           marginRight: '-2px'
@@ -758,11 +783,20 @@ const Dashboard = () => {
                       size="small"
                       variant="outlined"
                       color="primary"
+                      component="a"
+                      href={epic.jira_issue_url || `https://your-jira-instance.atlassian.net/browse/${epic.jira_issue_key}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      clickable
                       sx={{ 
                         ml: 1, 
                         fontSize: '0.75rem',
                         borderColor: '#0052CC',
                         color: '#0052CC',
+                        textDecoration: 'none',
+                        '&:hover': {
+                          backgroundColor: 'rgba(0, 82, 204, 0.08)',
+                        },
                         '& .MuiChip-icon': {
                           marginLeft: '4px',
                           marginRight: '-2px'
@@ -929,7 +963,13 @@ const Dashboard = () => {
   }
 
   return (
-    <Container maxWidth="xl" sx={{ py: 4 }}>
+    <Container maxWidth="xl" sx={{ 
+      py: 4,
+      background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.08) 0%, rgba(241, 245, 249, 0.95) 30%, rgba(255, 255, 255, 0.9) 60%, rgba(226, 232, 240, 0.85) 100%)',
+      borderRadius: 3,
+      minHeight: 'calc(100vh - 120px)',
+      boxShadow: '0 4px 20px rgba(30, 58, 138, 0.1)'
+    }}>
       {/* Header */}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
         <Typography variant="h4" sx={{ fontWeight: 700, color: '#667eea' }}>
@@ -951,7 +991,13 @@ const Dashboard = () => {
       <Grid container spacing={3} sx={{ mb: 4 }}>
         {/* Project Selector */}
         <Grid item xs={12}>
-          <Paper sx={{ p: 3, mb: 2 }}>
+          <Paper sx={{ 
+            p: 3, 
+            mb: 2,
+            background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.06) 0%, rgba(255, 255, 255, 0.98) 40%, rgba(241, 245, 249, 0.9) 100%)',
+            border: '2px solid rgba(30, 58, 138, 0.15)',
+            boxShadow: '0 4px 15px rgba(30, 58, 138, 0.12)'
+          }}>
             <FormControl fullWidth>
               <InputLabel id="project-selector-label">Select Project</InputLabel>
               <Select
@@ -1028,7 +1074,12 @@ const Dashboard = () => {
       </Grid>
 
       {/* Projects List */}
-      <Paper sx={{ p: 3 }}>
+      <Paper sx={{ 
+        p: 3,
+        background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 255, 0.95) 100%)',
+        backdropFilter: 'blur(10px)',
+        boxShadow: '0 4px 20px rgba(102, 126, 234, 0.1)'
+      }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
           <Typography variant="h5" sx={{ fontWeight: 600 }}>
             Projects Overview

@@ -9,6 +9,7 @@ import boto3
 from botocore.exceptions import ClientError
 from agents.config import agent_config
 from agents.logger import logger
+from strands import tool
 import os
 
 
@@ -482,6 +483,7 @@ dynamodb_tools = DynamoDBTools()
 
 
 # Tool functions for agent integration
+@tool
 def store_test_artifacts_tool(
     project_id: str,
     project_name: str,
@@ -540,7 +542,7 @@ def store_test_artifacts_tool(
         }
         return json.dumps(error_result)
 
-
+@tool
 def get_project_artifacts_tool(project_id: str) -> str:
     """
     Tool function to retrieve project artifacts from DynamoDB.
@@ -553,3 +555,305 @@ def get_project_artifacts_tool(project_id: str) -> str:
     """
     result = dynamodb_tools.get_project_artifacts(project_id)
     return json.dumps(result, indent=2)
+
+@tool
+def update_use_case_tool(
+    project_id: str,
+    epic_id: str,
+    feature_id: str,
+    use_case_id: str,
+    use_case_data: str
+) -> str:
+    """
+    Tool function to update a specific use case in DynamoDB.
+    This function updates an existing use case with enhanced data.
+    
+    Args:
+        project_id: Project identifier
+        epic_id: Epic identifier
+        feature_id: Feature identifier
+        use_case_id: Use case identifier
+        use_case_data: JSON string containing updated use case data
+        
+    Returns:
+        JSON string with operation result
+    """
+    try:
+        # Parse use case data
+        use_case = json.loads(use_case_data)
+        timestamp = datetime.utcnow().isoformat()
+        
+        # Build the sort key
+        sk = f'EPIC#{epic_id}#FEATURE#{feature_id}#UC#{use_case_id}'
+        
+        # Prepare update expression and attribute values
+        update_parts = ['updated_at = :updated_at']
+        expr_attr_values = {':updated_at': {'S': timestamp}}
+        
+        # Update basic fields
+        if 'title' in use_case:
+            update_parts.append('title = :title')
+            expr_attr_values[':title'] = {'S': use_case['title']}
+        
+        if 'description' in use_case:
+            update_parts.append('description = :description')
+            expr_attr_values[':description'] = {'S': use_case['description']}
+        
+        if 'priority' in use_case:
+            update_parts.append('priority = :priority')
+            expr_attr_values[':priority'] = {'S': use_case['priority']}
+        
+        if 'review_status' in use_case:
+            update_parts.append('review_status = :review_status')
+            expr_attr_values[':review_status'] = {'S': use_case['review_status']}
+        
+        # Update acceptance criteria
+        if 'acceptance_criteria' in use_case:
+            update_parts.append('acceptance_criteria = :acceptance_criteria')
+            expr_attr_values[':acceptance_criteria'] = {
+                'L': [{'S': criteria} for criteria in use_case['acceptance_criteria']]
+            }
+        
+        # Update test scenarios outline
+        if 'test_scenarios_outline' in use_case:
+            update_parts.append('test_scenarios_outline = :test_scenarios_outline')
+            expr_attr_values[':test_scenarios_outline'] = {
+                'L': [{'S': scenario} for scenario in use_case['test_scenarios_outline']]
+            }
+        
+        # Update compliance mapping
+        if 'compliance_mapping' in use_case:
+            update_parts.append('compliance_mapping = :compliance_mapping')
+            expr_attr_values[':compliance_mapping'] = {
+                'L': [{'S': mapping} for mapping in use_case['compliance_mapping']]
+            }
+        
+        # Update Jira fields
+        if 'jira_issue_id' in use_case:
+            update_parts.append('jira_issue_id = :jira_issue_id')
+            expr_attr_values[':jira_issue_id'] = {'S': str(use_case['jira_issue_id'])}
+        
+        if 'jira_issue_key' in use_case:
+            update_parts.append('jira_issue_key = :jira_issue_key')
+            expr_attr_values[':jira_issue_key'] = {'S': use_case['jira_issue_key']}
+        
+        if 'jira_issue_url' in use_case:
+            update_parts.append('jira_issue_url = :jira_issue_url')
+            expr_attr_values[':jira_issue_url'] = {'S': use_case['jira_issue_url']}
+        
+        if 'jira_status' in use_case:
+            update_parts.append('jira_status = :jira_status')
+            expr_attr_values[':jira_status'] = {'S': use_case['jira_status']}
+        
+        # Update optional fields
+        if 'model_explanation' in use_case:
+            update_parts.append('model_explanation = :model_explanation')
+            expr_attr_values[':model_explanation'] = {'S': use_case['model_explanation']}
+        
+        if 'comments' in use_case:
+            update_parts.append('comments = :comments')
+            expr_attr_values[':comments'] = {'S': use_case['comments']}
+        
+        # Build update expression
+        update_expression = 'SET ' + ', '.join(update_parts)
+        
+        # Update the item
+        dynamodb_tools.dynamodb.update_item(
+            TableName=dynamodb_tools.table_name,
+            Key={
+                'PK': {'S': f'PROJECT#{project_id}'},
+                'SK': {'S': sk}
+            },
+            UpdateExpression=update_expression,
+            ExpressionAttributeValues=expr_attr_values
+        )
+        
+        logger.info(
+            f"Updated use case {use_case_id} in project {project_id}",
+            extra={'project_id': project_id, 'use_case_id': use_case_id}
+        )
+        
+        result = {
+            'success': True,
+            'project_id': project_id,
+            'use_case_id': use_case_id,
+            'message': f'Successfully updated use case {use_case_id}',
+            'updated_at': timestamp
+        }
+        
+        return json.dumps(result, indent=2)
+        
+    except json.JSONDecodeError as e:
+        error_result = {
+            'success': False,
+            'error': f'Invalid JSON format for use case data: {str(e)}'
+        }
+        return json.dumps(error_result)
+    except ClientError as e:
+        error_result = {
+            'success': False,
+            'error': f'DynamoDB error updating use case: {str(e)}'
+        }
+        logger.error(error_result['error'], extra={'project_id': project_id})
+        return json.dumps(error_result)
+    except Exception as e:
+        error_result = {
+            'success': False,
+            'error': f'Error updating use case: {str(e)}'
+        }
+        logger.error(error_result['error'], extra={'project_id': project_id})
+        return json.dumps(error_result)
+
+@tool
+def update_test_case_tool(
+    project_id: str,
+    epic_id: str,
+    feature_id: str,
+    use_case_id: str,
+    test_case_id: str,
+    test_case_data: str
+) -> str:
+    """
+    Tool function to update a specific test case in DynamoDB.
+    This function updates an existing test case with enhanced data.
+    
+    Args:
+        project_id: Project identifier
+        epic_id: Epic identifier
+        feature_id: Feature identifier
+        use_case_id: Use case identifier
+        test_case_id: Test case identifier
+        test_case_data: JSON string containing updated test case data
+        
+    Returns:
+        JSON string with operation result
+    """
+    try:
+        # Parse test case data
+        test_case = json.loads(test_case_data)
+        timestamp = datetime.utcnow().isoformat()
+        
+        # Build the sort key
+        sk = f'EPIC#{epic_id}#FEATURE#{feature_id}#UC#{use_case_id}#TC#{test_case_id}'
+        
+        # Prepare update expression and attribute values
+        update_parts = ['updated_at = :updated_at']
+        expr_attr_values = {':updated_at': {'S': timestamp}}
+        
+        # Update basic fields
+        if 'test_case_title' in test_case:
+            update_parts.append('test_case_title = :test_case_title')
+            expr_attr_values[':test_case_title'] = {'S': test_case['test_case_title']}
+        
+        if 'test_type' in test_case:
+            update_parts.append('test_type = :test_type')
+            expr_attr_values[':test_type'] = {'S': test_case['test_type']}
+        
+        if 'priority' in test_case:
+            update_parts.append('priority = :priority')
+            expr_attr_values[':priority'] = {'S': test_case['priority']}
+        
+        if 'expected_result' in test_case:
+            update_parts.append('expected_result = :expected_result')
+            expr_attr_values[':expected_result'] = {'S': test_case['expected_result']}
+        
+        if 'review_status' in test_case:
+            update_parts.append('review_status = :review_status')
+            expr_attr_values[':review_status'] = {'S': test_case['review_status']}
+        
+        # Update preconditions
+        if 'preconditions' in test_case:
+            update_parts.append('preconditions = :preconditions')
+            expr_attr_values[':preconditions'] = {
+                'L': [{'S': precond} for precond in test_case['preconditions']]
+            }
+        
+        # Update test steps
+        if 'test_steps' in test_case:
+            update_parts.append('test_steps = :test_steps')
+            expr_attr_values[':test_steps'] = {
+                'L': [{'S': step} for step in test_case['test_steps']]
+            }
+        
+        # Update compliance mapping
+        if 'compliance_mapping' in test_case:
+            update_parts.append('compliance_mapping = :compliance_mapping')
+            expr_attr_values[':compliance_mapping'] = {
+                'L': [{'S': mapping} for mapping in test_case['compliance_mapping']]
+            }
+        
+        # Update Jira fields
+        if 'jira_issue_id' in test_case:
+            update_parts.append('jira_issue_id = :jira_issue_id')
+            expr_attr_values[':jira_issue_id'] = {'S': str(test_case['jira_issue_id'])}
+        
+        if 'jira_issue_key' in test_case:
+            update_parts.append('jira_issue_key = :jira_issue_key')
+            expr_attr_values[':jira_issue_key'] = {'S': test_case['jira_issue_key']}
+        
+        if 'jira_issue_url' in test_case:
+            update_parts.append('jira_issue_url = :jira_issue_url')
+            expr_attr_values[':jira_issue_url'] = {'S': test_case['jira_issue_url']}
+        
+        if 'jira_status' in test_case:
+            update_parts.append('jira_status = :jira_status')
+            expr_attr_values[':jira_status'] = {'S': test_case['jira_status']}
+        
+        # Update optional fields
+        if 'model_explanation' in test_case:
+            update_parts.append('model_explanation = :model_explanation')
+            expr_attr_values[':model_explanation'] = {'S': test_case['model_explanation']}
+        
+        if 'comments' in test_case:
+            update_parts.append('comments = :comments')
+            expr_attr_values[':comments'] = {'S': test_case['comments']}
+        
+        # Build update expression
+        update_expression = 'SET ' + ', '.join(update_parts)
+        
+        # Update the item
+        dynamodb_tools.dynamodb.update_item(
+            TableName=dynamodb_tools.table_name,
+            Key={
+                'PK': {'S': f'PROJECT#{project_id}'},
+                'SK': {'S': sk}
+            },
+            UpdateExpression=update_expression,
+            ExpressionAttributeValues=expr_attr_values
+        )
+        
+        logger.info(
+            f"Updated test case {test_case_id} in project {project_id}",
+            extra={'project_id': project_id, 'test_case_id': test_case_id}
+        )
+        
+        result = {
+            'success': True,
+            'project_id': project_id,
+            'test_case_id': test_case_id,
+            'message': f'Successfully updated test case {test_case_id}',
+            'updated_at': timestamp
+        }
+        
+        return json.dumps(result, indent=2)
+        
+    except json.JSONDecodeError as e:
+        error_result = {
+            'success': False,
+            'error': f'Invalid JSON format for test case data: {str(e)}'
+        }
+        return json.dumps(error_result)
+    except ClientError as e:
+        error_result = {
+            'success': False,
+            'error': f'DynamoDB error updating test case: {str(e)}'
+        }
+        logger.error(error_result['error'], extra={'project_id': project_id})
+        return json.dumps(error_result)
+    except Exception as e:
+        error_result = {
+            'success': False,
+            'error': f'Error updating test case: {str(e)}'
+        }
+        logger.error(error_result['error'], extra={'project_id': project_id})
+        return json.dumps(error_result)

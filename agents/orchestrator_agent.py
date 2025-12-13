@@ -31,7 +31,7 @@ from agents.reviewer_agent import reviewer_agenttool
 from agents.test_generator_agent import testgenerator_agenttool
 from agents.enhance_agent import enhance_agenttool
 from agents.migrate_agent import migrate_agenttool
-from agents.dynamodb_tools import store_test_artifacts_tool, get_project_artifacts_tool
+from agents.dynamodb_tools import store_test_artifacts_tool, get_project_artifacts_tool,update_use_case_tool, update_test_case_tool
 
 
 # Pydantic Models for API
@@ -293,17 +293,6 @@ OUTPUT FORMATS (NORMALIZED)
   "test_generation_status": {}
 }
 
-### Enhancement Review Completed
-{
-  "agents_tools_invoked": ["enhance_testcase_agent"],
-  "action_summary": "Enhancement requirements confirmed and ready for update.",
-  "status": "enhancement_review_completed",
-  "next_action": "update_artifact_in_jira_and_DynamoDB",
-  "assistant_response": [],
-  "readiness_plan": {},
-  "test_generation_status": {}
-}
-
 ### Enhancement Update Completed
 {
   "agents_tools_invoked": [
@@ -380,7 +369,9 @@ tools_list = [
     migrate_agenttool,
     mem0_memory,
     store_test_artifacts_tool,
-    get_project_artifacts_tool
+    get_project_artifacts_tool,
+    update_use_case_tool,
+    update_test_case_tool
 ]
 
 # Add MCP client directly to tools list - it will manage its own context

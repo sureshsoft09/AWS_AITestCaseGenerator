@@ -450,7 +450,9 @@ async def execute_generation(request: ExecuteRequest):
             to generate test cases in a structured format.
 
             Once the test artifacts are generated, create Jira issues for each items (epics to test cases) using the MCP Server Jira integration.
-
+            Map Jira IDs, key and url values into the artifacts, setting jira_status = "pushed".
+            Also, store all generated artifacts in DynamoDB using the tool store_test_artifacts_tool.
+        
             Project ID - {request.project_id}
             Jira Project Key - {request.jira_project_key}
             Notification Email - {request.notification_email}

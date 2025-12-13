@@ -66,9 +66,13 @@ const api = {
   
   // Enhancement APIs
   enhanceTestCases: (data) => apiInstance.post('/enhance_test_cases', data),
-  enhanceTestCasesChat: (data) => apiInstance.post('/enhance_test_cases_chat', data),
-  applyEnhancement: (data) => apiInstance.post('/enhance_test_cases_chat', {
-    prompt: data.prompt
+  enhanceTestCasesChat: (data) => apiInstance.post('/api/enhance/chat', {
+    session_id: data.session_id,
+    enhancement_instructions: data.enhancement_instructions
+  }),
+  applyEnhancement: (data) => apiInstance.post('/api/enhance/chat', {
+    session_id: data.session_id,
+    enhancement_instructions: data.enhancement_instructions
   }),
   
   // Migration APIs

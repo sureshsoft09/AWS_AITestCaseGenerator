@@ -72,8 +72,8 @@ const TopNavBar = () => {
       position="fixed"
       sx={{
         zIndex: (theme) => theme.zIndex.drawer + 1,
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
+        background: 'linear-gradient(135deg, #1e3a8a 0%, #4338ca 50%, #7c3aed 100%)',
+        boxShadow: '0 4px 20px rgba(30, 58, 138, 0.4)',
       }}
     >
       <Toolbar sx={{ justifyContent: 'space-between' }}>
@@ -153,9 +153,7 @@ const TopNavBar = () => {
                   '&:hover': {
                     backgroundColor: 'rgba(255, 255, 255, 0.15)',
                     backdropFilter: 'blur(10px)',
-                    transform: 'translateY(-1px)',
                   },
-                  transition: 'all 0.2s ease-in-out',
                   display: { xs: 'none', md: 'flex' }, // Hide on small screens
                 }}
               >

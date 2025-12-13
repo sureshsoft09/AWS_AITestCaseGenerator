@@ -16,7 +16,7 @@ const Layout = ({ children }) => {
         sx={{
           flexGrow: 1,
           mt: 8, // Account for top navigation
-          background: 'linear-gradient(180deg, #f8faff 0%, #ffffff 100%)',
+          background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.05) 0%, rgba(241, 245, 249, 0.8) 25%, rgba(255, 255, 255, 0.9) 50%, rgba(226, 232, 240, 0.6) 75%, rgba(30, 58, 138, 0.03) 100%)',
           minHeight: 'calc(100vh - 64px)',
         }}
       >

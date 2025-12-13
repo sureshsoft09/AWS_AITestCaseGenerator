@@ -272,9 +272,7 @@ const AnalyticsReport = () => {
         height: '100%',
         background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 250, 255, 0.9) 100%)',
         border: '1px solid rgba(102, 126, 234, 0.1)',
-        transition: 'transform 0.2s ease, box-shadow 0.2s ease',
         '&:hover': {
-          transform: 'translateY(-4px)',
           boxShadow: '0 8px 25px rgba(102, 126, 234, 0.15)',
         },
       }}

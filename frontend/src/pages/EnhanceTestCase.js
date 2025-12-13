@@ -47,6 +47,21 @@ import {
 } from '@mui/icons-material';
 import { useNotification } from '../contexts/NotificationContext';
 import api from '../services/api';
+import JiraImage from '../assets/Jira_Image.png';
+
+// Custom Jira Icon component using the actual Jira image
+const JiraIcon = ({ sx = {} }) => (
+  <img 
+    src={JiraImage} 
+    alt="Jira" 
+    style={{
+      width: sx.fontSize || '16px',
+      height: sx.fontSize || '16px',
+      objectFit: 'contain',
+      ...sx
+    }}
+  />
+);
 
 const EnhanceTestCase = () => {
   const [projects, setProjects] = useState([]);
@@ -54,7 +69,6 @@ const EnhanceTestCase = () => {
   const [projectHierarchy, setProjectHierarchy] = useState(null);
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
-  const [projectClarificationStatus, setProjectClarificationStatus] = useState({});
   const [expandedEpics, setExpandedEpics] = useState({});
   const [expandedFeatures, setExpandedFeatures] = useState({});
   const [expandedUseCases, setExpandedUseCases] = useState({});
@@ -62,6 +76,7 @@ const EnhanceTestCase = () => {
   // AI Assistant Dialog State
   const [aiDialogOpen, setAiDialogOpen] = useState(false);
   const [currentArtifact, setCurrentArtifact] = useState(null);
+  const [sessionId, setSessionId] = useState(null);
   const [chatHistory, setChatHistory] = useState([]);
   const [userMessage, setUserMessage] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
@@ -99,16 +114,15 @@ const EnhanceTestCase = () => {
   const loadProjects = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/api/projects');
+      // Load list of projects for dropdown using the same API as Dashboard
+      const response = await api.getProjectsList();
       const projectsList = response.data.projects || [];
       setProjects(projectsList);
       
-      // Check clarification status for each project
-      const clarificationStatuses = {};
-      for (const project of projectsList) {
-        clarificationStatuses[project.project_id] = await checkProjectClarificationStatus(project.project_id);
+      // If there's at least one project and none is selected, select the first one
+      if (projectsList.length > 0 && !selectedProject) {
+        setSelectedProject(projectsList[0].project_id);
       }
-      setProjectClarificationStatus(clarificationStatuses);
       
     } catch (error) {
       console.error('Error loading projects:', error);
@@ -132,9 +146,17 @@ const EnhanceTestCase = () => {
     
     try {
       setAnalyzing(true);
-      const response = await api.get(`/api/projects/${selectedProject}/hierarchy`);
-      setProjectHierarchy(response.data.hierarchy);
-      showNotification('Test cases analyzed successfully', 'success');
+      // Load project artifacts from DynamoDB via backend (same as Dashboard)
+      const response = await api.getProjectArtifacts(selectedProject);
+      const projectData = response.data;
+      
+      if (projectData.success) {
+        // Set the project hierarchy from the artifacts
+        setProjectHierarchy(projectData.hierarchy);
+        showNotification('Test cases analyzed successfully', 'success');
+      } else {
+        showNotification('Failed to load project artifacts', 'error');
+      }
     } catch (error) {
       console.error('Error analyzing test cases:', error);
       showNotification('Failed to analyze test cases', 'error');
@@ -146,6 +168,10 @@ const EnhanceTestCase = () => {
   const handleRefactor = (artifact, type, context = {}) => {
     const enhancedArtifact = { ...artifact, type, ...context };
     setCurrentArtifact(enhancedArtifact);
+    
+    // Generate new session ID for this enhancement session
+    const newSessionId = `enhance-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    setSessionId(newSessionId);
     
     // Prefill context message
     const contextMessage = {
@@ -200,32 +226,54 @@ Please provide enhancement suggestions or ask clarifying questions.`
       if (!currentArtifact) return;
       
       setSendingMessage(true);
-      setAgentStatus('Applying enhancement and pushing to Jira and Firestore...');
+      setAgentStatus('Applying enhancement and updating to Jira and DynamoDB...');
       
-      // Prepare the request data with project keys
+      // Prepare the request data with session_id and enhancement_instructions
       const requestData = {
-        project_id: selectedProject,
-        jira_project_key: projectHierarchy?.jira_project_key || 'DEFAULT',
-        firestore_project_id: selectedProject,
-        prompt: `The generated enhanced test case looks fine, push the enhanced test case to Jira project key: ${projectHierarchy?.jira_project_key || 'DEFAULT'} and Firestore project ID: ${selectedProject} through MCP tool by master_agent. Include Preconditions, Test Steps, Expected Result into jira issue description`
+        session_id: sessionId,
+        enhancement_instructions: `
+        The generated enhanced test case looks fine, update the enhanced test case into Jira project key: ${projectHierarchy?.jira_project_key || 'DEFAULT'} and DynamoDB project ID: ${selectedProject} through MCP tool and DynamoDB tools by orchestrator agent. Include Preconditions, Test Steps, Expected Result into jira issue description
+        
+        *** Use Jiira MCP tool to update isssue for the respective use case/ test case. ***
+        *** Use update_usecase_tool or update_testcase_tool to apply changes as needed. ***
+        `
       };
 
-      // Call the new applyEnhancement API
+      // Call the applyEnhancement API
       const response = await api.applyEnhancement(requestData);
+      console.log('Apply enhancement response:', response);
       
-      // Handle response that comes as response.data.response with JSON wrapped in markdown
-      let responseData = response.data.response || response.data;
-      if (typeof responseData === 'string' && responseData.includes('```json')) {
-        // Extract JSON from markdown code block
-        const jsonMatch = responseData.match(/```json\n([\s\S]*?)\n```/);
-        if (jsonMatch) {
-          responseData = JSON.parse(jsonMatch[1]);
+      // Handle response from backend EnhanceChatResponse
+      const responseData = response.data;
+      
+      // Extract agent_response and parse if it's JSON string
+      let agentResponseData = responseData.agent_response;
+      
+      // Try to parse agent_response as JSON if it's a string
+      if (typeof agentResponseData === 'string') {
+        try {
+          // Check if it's wrapped in markdown code block
+          if (agentResponseData.includes('```json')) {
+            const jsonMatch = agentResponseData.match(/```json\n([\s\S]*?)\n```/);
+            if (jsonMatch) {
+              agentResponseData = JSON.parse(jsonMatch[1]);
+            }
+          } else {
+            // Try parsing directly as JSON
+            agentResponseData = JSON.parse(agentResponseData);
+          }
+        } catch (parseError) {
+          console.log('Agent response is not JSON, treating as plain text:', agentResponseData);
+          // Keep as string if not valid JSON
         }
       }
       
-      if (responseData.status === 'enhancement_update_completed') {
+      console.log('Parsed agent response data:', agentResponseData);
+      
+      if (responseData.status === 'enhancement_update_completed' || (agentResponseData && agentResponseData.status === 'enhancement_update_completed')) {
         // Show success popup
-        setSuccessMessage(responseData.action_summary || 'Enhanced artifact successfully updated in database and Jira.');
+        const successMsg = (agentResponseData && agentResponseData.action_summary) || responseData.agent_response || 'Enhanced artifact successfully updated in database and Jira.';
+        setSuccessMessage(successMsg);
         setSuccessPopupOpen(true);
         setCanApplyEnhancement(false);
         setAiDialogOpen(false);
@@ -233,7 +281,8 @@ Please provide enhancement suggestions or ask clarifying questions.`
         // Note: We don't refresh here as it's handled in the success popup dialog
         return; // Exit successfully without triggering catch block
       } else {
-        showNotification(responseData.message || 'Failed to apply enhancement', 'error');
+        const errorMsg = (agentResponseData && agentResponseData.message) || responseData.agent_response || 'Failed to apply enhancement';
+        showNotification(errorMsg, 'error');
       }
       
     } catch (error) {
@@ -300,27 +349,31 @@ Previous Context: ${chatHistory.filter(msg => msg.role === 'system').map(msg => 
 Please analyze the existing ${artifactType} and either ask clarifying questions or provide enhancement suggestions based on the user input.`;
 
       const payload = {
-        prompt: contextualPrompt
+        session_id: sessionId,
+        enhancement_instructions: contextualPrompt
       };
 
       const response = await api.enhanceTestCasesChat(payload);
-      const agentResponse = response.data;
+
+      console.log('Enhancement chat response:', response);
       
-      setAgentStatus(agentResponse);
+      const responseData = response.data;
+      
+      setAgentStatus(responseData);
       
       const assistantMessage = {
         role: 'assistant',
-        content: agentResponse.response || 'No response received from agent'
+        content: responseData.agent_response || 'No response received from agent'
       };
       
       setChatHistory(prev => [...prev, assistantMessage]);
       setCanApplyEnhancement(true); // Enable apply button after AI response
       
       // Check if the response indicates completion or success
-      if (agentResponse.response && (
-        agentResponse.response.toLowerCase().includes('completed') ||
-        agentResponse.response.toLowerCase().includes('updated') ||
-        agentResponse.response.toLowerCase().includes('enhanced')
+      if (responseData.agent_response && (
+        responseData.agent_response.toLowerCase().includes('completed') ||
+        responseData.agent_response.toLowerCase().includes('updated') ||
+        responseData.agent_response.toLowerCase().includes('enhanced')
       )) {
         showNotification('Enhancement request processed! Check the response for details.', 'success');
       }
@@ -389,17 +442,6 @@ Please analyze the existing ${artifactType} and either ask clarifying questions 
   const hasProjectClarificationNeeds = (projectHierarchy) => {
     if (!projectHierarchy || !projectHierarchy.epics) return false;
     return projectHierarchy.epics.some(epic => hasFeaturesNeedingClarification(epic));
-  };
-
-  const checkProjectClarificationStatus = async (projectId) => {
-    try {
-      const response = await api.get(`/api/projects/${projectId}/hierarchy`);
-      const hierarchy = response.data.hierarchy;
-      return hasProjectClarificationNeeds(hierarchy);
-    } catch (error) {
-      console.error(`Error checking clarification status for project ${projectId}:`, error);
-      return false;
-    }
   };
 
   // InfoButton component for model explanations
@@ -487,11 +529,29 @@ Please analyze the existing ${artifactType} and either ask clarifying questions 
                 )}
                 {testCase.jira_issue_key && (
                   <Chip
-                    label={`Jira: ${testCase.jira_issue_key}`}
+                    icon={<JiraIcon sx={{ fontSize: '14px' }} />}
+                    label={testCase.jira_issue_key}
                     size="small"
                     variant="outlined"
                     color="primary"
-                    sx={{ fontSize: '0.7rem' }}
+                    component="a"
+                    href={testCase.jira_issue_url || `https://your-jira-instance.atlassian.net/browse/${testCase.jira_issue_key}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    clickable
+                    sx={{ 
+                      fontSize: '0.7rem',
+                      borderColor: '#0052CC',
+                      color: '#0052CC',
+                      textDecoration: 'none',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 82, 204, 0.08)',
+                      },
+                      '& .MuiChip-icon': {
+                        marginLeft: '4px',
+                        marginRight: '-2px'
+                      }
+                    }}
                   />
                 )}
                 <Button
@@ -627,11 +687,29 @@ Please analyze the existing ${artifactType} and either ask clarifying questions 
                     )}
                     {useCase.jira_issue_key && (
                       <Chip
-                        label={`Jira: ${useCase.jira_issue_key}`}
+                        icon={<JiraIcon sx={{ fontSize: '16px' }} />}
+                        label={useCase.jira_issue_key}
                         size="small"
                         variant="outlined"
                         color="primary"
-                        sx={{ fontSize: '0.75rem' }}
+                        component="a"
+                        href={useCase.jira_issue_url || `https://your-jira-instance.atlassian.net/browse/${useCase.jira_issue_key}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        clickable
+                        sx={{ 
+                          fontSize: '0.75rem',
+                          borderColor: '#0052CC',
+                          color: '#0052CC',
+                          textDecoration: 'none',
+                          '&:hover': {
+                            backgroundColor: 'rgba(0, 82, 204, 0.08)',
+                          },
+                          '& .MuiChip-icon': {
+                            marginLeft: '4px',
+                            marginRight: '-2px'
+                          }
+                        }}
                       />
                     )}
                     <Button
@@ -738,11 +816,30 @@ Please analyze the existing ${artifactType} and either ask clarifying questions 
                 )}
                 {feature.jira_issue_key && (
                   <Chip
-                    label={`Jira: ${feature.jira_issue_key}`}
+                    icon={<JiraIcon sx={{ fontSize: '16px' }} />}
+                    label={feature.jira_issue_key}
                     size="small"
                     variant="outlined"
                     color="primary"
-                    sx={{ ml: 1, fontSize: '0.75rem' }}
+                    component="a"
+                    href={feature.jira_issue_url || `https://your-jira-instance.atlassian.net/browse/${feature.jira_issue_key}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    clickable
+                    sx={{ 
+                      ml: 1, 
+                      fontSize: '0.75rem',
+                      borderColor: '#0052CC',
+                      color: '#0052CC',
+                      textDecoration: 'none',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 82, 204, 0.08)',
+                      },
+                      '& .MuiChip-icon': {
+                        marginLeft: '4px',
+                        marginRight: '-2px'
+                      }
+                    }}
                   />
                 )}
                 {hasUseCasesNeedingClarification(feature) && (
@@ -812,11 +909,30 @@ Please analyze the existing ${artifactType} and either ask clarifying questions 
                 )}
                 {epic.jira_issue_key && (
                   <Chip
-                    label={`Jira: ${epic.jira_issue_key}`}
+                    icon={<JiraIcon sx={{ fontSize: '16px' }} />}
+                    label={epic.jira_issue_key}
                     size="small"
                     variant="outlined"
                     color="primary"
-                    sx={{ ml: 1, fontSize: '0.75rem' }}
+                    component="a"
+                    href={epic.jira_issue_url || `https://your-jira-instance.atlassian.net/browse/${epic.jira_issue_key}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    clickable
+                    sx={{ 
+                      ml: 1, 
+                      fontSize: '0.75rem',
+                      borderColor: '#0052CC',
+                      color: '#0052CC',
+                      textDecoration: 'none',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 82, 204, 0.08)',
+                      },
+                      '& .MuiChip-icon': {
+                        marginLeft: '4px',
+                        marginRight: '-2px'
+                      }
+                    }}
                   />
                 )}
                 {hasFeaturesNeedingClarification(epic) && (
@@ -910,17 +1026,6 @@ Please analyze the existing ${artifactType} and either ask clarifying questions 
                         <Typography sx={{ flexGrow: 1 }}>
                           {project.project_name} ({project.project_id})
                         </Typography>
-                        {projectClarificationStatus[project.project_id] && (
-                          <Tooltip title="Contains items needing clarification">
-                            <WarningIcon 
-                              sx={{ 
-                                color: '#ff9800', 
-                                fontSize: '1.2rem',
-                                ml: 1
-                              }} 
-                            />
-                          </Tooltip>
-                        )}
                       </Box>
                     </MenuItem>
                   ))
